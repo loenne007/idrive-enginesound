@@ -82,7 +82,8 @@ mgu.run({
 
         /* ---------- Engine page ---------- */
         function drawEngine(cv, t) {
-            const p = PRESETS[core.preset()], on = settings.get('enabled') !== false;
+            const p = core.presetInfo(core.preset()), on = settings.get('enabled') !== false;
+            const red = p.red || Number(settings.get('realRedline')) || 4800;   // (D: the car's own range)
             const why = core.reason, d = core.d, o = core.out;
             // status
             G.panel(cv, t, 24, 44, 520, 468, 'Engine Sound');
@@ -111,9 +112,9 @@ mgu.run({
             cv.text(rpm === null ? '-' : String(Math.round(o.rpm)), 920, 176, 72, why ? t.dim : t.accent, { align: 'center', font: 'num' });
             cv.text(p.title.toUpperCase() + ' RPM', 920, 206, 16, t.dim, { align: 'center', font: 'bold', spacing: 1.5 });
             // rev bar of the virtual engine
-            const fr = Math.max(0, Math.min(1, o.rpm / (p.red * 1.05)));
+            const fr = Math.max(0, Math.min(1, o.rpm / (red * 1.05)));
             cv.roundRect(590, 236, 440, 22, 11, withAlpha('#ffffff', 0.08));
-            cv.roundRect(590, 236, Math.max(22, 440 * fr), 22, 11, fr > p.red / (p.red * 1.05) * 0.9 ? t.crit : t.accent);
+            cv.roundRect(590, 236, Math.max(22, 440 * fr), 22, 11, fr > 0.9 / 1.05 ? t.crit : t.accent);
             // load: pulling right, overrun left
             const ld = core.load(d.torque);
             cv.text('LOAD', 590, 300, 16, t.dim, { font: 'bold', spacing: 1.5 });
@@ -131,11 +132,11 @@ mgu.run({
             // engines
             G.panel(cv, t, 1076, 44, 500, 468, 'Engine');
             ORDER.forEach((k, i) => {
-                const q = PRESETS[k], sel = k === core.preset(), y = 96 + i * 76;
+                const q = core.presetInfo(k), sel = k === core.preset(), y = 96 + i * 76;
                 cv.roundRect(1100, y, 452, 68, 14, sel ? withAlpha(t.accent, 0.3) : withAlpha('#ffffff', 0.05));
                 if (sel) cv.strokeRoundRect(1100, y, 452, 68, 14, 2, t.accent);
                 cv.text(q.title, 1124, y + 32, 26, t.text, { font: 'bold' });
-                cv.text(q.sub + ' - ' + q.red + ' rpm', 1124, y + 56, 16, t.dim);
+                cv.text(q.red ? q.sub + ' - ' + q.red + ' rpm' : q.sub, 1124, y + 56, 16, t.dim);
                 if (cv.own) cv.target(1100, y, 452, 68, () => { settings.set('engine', k); return redraw(); }, 'eng-' + k);
             });
             // the sound engine (es-synth-<id>): which synthesizer plays; greyed = not in the installed service

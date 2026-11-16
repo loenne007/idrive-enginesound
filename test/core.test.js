@@ -33,6 +33,15 @@ function make(over) {
     const { core } = make({ rpmMap: 'real' });
     assert.strictEqual(core.virtualRpm(2345), 2345);
 }
+// engine D (Active Sound Design) gets the car's real rpm and shows its own preset names
+{
+    const { core } = make({ soundEngine: 'd', engine: 'v10' });
+    assert.strictEqual(core.virtualRpm(2345), 2345);
+    assert.strictEqual(core.presetInfo('v10').title, 'V6 TDI');
+    const a = make({ soundEngine: 'a', engine: 'v10' }).core;
+    assert.strictEqual(a.presetInfo('v10').title, 'V10');
+    assert(a.virtualRpm(2345) > 2345);
+}
 // load: torque against the max, overrun negative
 {
     const { core } = make();

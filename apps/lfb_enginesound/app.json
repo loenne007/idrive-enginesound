@@ -2,7 +2,7 @@
   "id": "lfb_enginesound",
   "title": "Engine Sound",
   "description": "A synthesized petrol engine (inline-6, V8, V10, V12) on the car's speakers, following the car's real rpm, gear and load",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "vendor": "loenne007",
   "license": "MIT",
   "loggingId": "LFES",
@@ -119,6 +119,14 @@
         [
           "b",
           "B (Engine_Sim, ported 1:1)"
+        ],
+        [
+          "c",
+          "C (light and quick)"
+        ],
+        [
+          "d",
+          "D (Active Sound Design, diesel)"
         ]
       ]
     },

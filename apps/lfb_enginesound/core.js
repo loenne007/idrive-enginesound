@@ -23,7 +23,16 @@ const ORDER = ['i6', 'v8', 'v10', 'v12'];
 const SOUND_ENGINES = [
     { id: 'a', title: 'A', sub: 'Engine_Sim style, rewritten' },
     { id: 'b', title: 'B', sub: 'Engine_Sim, ported 1:1' },
+    { id: 'c', title: 'C', sub: 'light and quick' },
+    // D emulates factory Active Sound Design: it enriches the car's own diesel, so it gets the REAL rpm, and its four
+    // presets are diesel characters (shown with these names)
+    { id: 'd', title: 'D', sub: 'Active Sound Design (diesel)', realRpm: true, presets: {
+        i6: { title: 'Straight-6 diesel', sub: 'BMW B57, X7 40d style' },
+        v8: { title: 'V8 TDI', sub: 'Audi SQ7 style' },
+        v10: { title: 'V6 TDI', sub: 'Audi S6 / S7 style burble' },
+        v12: { title: 'V6 TDI Sport', sub: 'stronger, dynamic calibration' } } },
 ];
+const soundEngineOf = (id) => SOUND_ENGINES.find((x) => x.id === id) || SOUND_ENGINES[0];
 
 const { DEVICE } = require('./route');
 
@@ -86,7 +95,7 @@ class Core {
     /* ---------- mapping ---------- */
     virtualRpm(real) {
         const p = PRESETS[this.preset()];
-        if (this.settings.get('rpmMap') === 'real') return real;
+        if (this.settings.get('rpmMap') === 'real' || soundEngineOf(this.soundEngine()).realRpm) return real;
         const top = Math.max(this.idle + 1000, Number(this.settings.get('realRedline')) || 4800);
         if (real <= this.idle) return real / this.idle * p.idle;
         const x = (real - this.idle) / (top - this.idle);
@@ -117,6 +126,12 @@ class Core {
     }
 
     soundEngine() { const e = this.settings.get('soundEngine'); return SOUND_ENGINES.some((x) => x.id === e) ? e : 'a'; }
+
+    /** The preset's title / subtitle / redline as shown: the sound engine's own names where it has them (D). */
+    presetInfo(k) {
+        const p = PRESETS[k], own = soundEngineOf(this.soundEngine()).presets;
+        return own && own[k] ? Object.assign({}, p, own[k], { red: null }) : p;
+    }
 
     _applySettings() {
         const p = this.preset();
@@ -186,4 +201,4 @@ class Core {
     }
 }
 
-module.exports = { Core, PRESETS, ORDER, SOUND_ENGINES, SOUND_SETTINGS };
+module.exports = { Core, PRESETS, ORDER, SOUND_ENGINES, SOUND_SETTINGS, soundEngineOf };
