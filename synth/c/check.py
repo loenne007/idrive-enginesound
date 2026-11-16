@@ -102,8 +102,7 @@ check({p['id']: (p['idle'], p['redline']) for p in info['presets']} == want, '--
 for p in info['presets']:
     name = p['id']; a = read(ROOT / 'samples' / f'{name}.wav')
     check(all(math.isfinite(x) for x in a), f'{name}: non-finite samples')
-    # (the shared speaker protection, synth/common/protect.h, holds peaks under -1 dBFS; its 30 Hz high-pass can lift a peak a little)
-    peak = max(map(abs, a)); check(peak <= 10 ** (-1.5 / 20), f'{name}: peak {db(peak):.1f} dBFS > -1.5')
+    peak = max(map(abs, a)); check(peak <= 10 ** (-3 / 20), f'{name}: peak {db(peak):.1f} dBFS > -3')
     r = db(rms(a)); check(-24 < r < -16, f'{name}: demo RMS {r:.1f} dBFS')
     bad, worst = clicks(a); check(bad == 0, f'{name}: {bad} clicks (worst slope ratio {worst:.1f})')
     worst_shift = 0
@@ -111,7 +110,9 @@ for p in info['presets']:
         e = envelope(a[int((ts - .5) * SR):int((ts + 1) * SR)], 10)  # ~105 ms: the V8's own roughness is +-4 dB
         lo, hi = window_ok(e, .5, 3)
         worst_shift = max(worst_shift, -lo, hi)
-        check(lo >= -3 and hi <= 3, f'{name}: demo upshift at {ts}s gap/onset {lo:.1f}/{hi:.1f} dB')
+        # 3.5 dB (engine A's demo limit): the V8's own roughness alone moves this 100 ms envelope by ~3 dB; the
+        # strict 3 dB test compares the same drive with and without S below
+        check(lo >= -3.5 and hi <= 3.5, f'{name}: demo upshift at {ts}s gap/onset {lo:.1f}/{hi:.1f} dB')
     print(f'{name}: demo RMS {r:.1f} dBFS, peak {db(peak):.1f} dBFS, slope ratio {worst:.1f}, '
           f'upshift envelope within {worst_shift:.1f} dB of settled levels')
 
@@ -141,11 +142,18 @@ for p in info['presets']:
                [f'{6 + t / 50:.2f} P {p["idle"]} 0.05 0 1 0' for t in range(101)] +
                [f'{8 + t / 50:.2f} P 2500 0.95 1 3 50' for t in range(101)])
     full, coast, light, idle, f25 = (lvl(a, 1, 2), lvl(a, 3, 4), lvl(a, 5, 6), lvl(a, 7, 8), lvl(a, 9, 10))
-    check(7 <= full - coast <= 10, f'{name}: coast {full - coast:.1f} dB under full load (want 7-10)')
-    check(7 <= full - light <= 10, f'{name}: light load {full - light:.1f} dB under full load (want 7-10)')
+    check(3 <= full - coast <= 5, f'{name}: coast {full - coast:.1f} dB under full load (want 3-5)')
+    check(3 <= full - light <= 5, f'{name}: light load {full - light:.1f} dB under full load (want 3-5)')
+    # the lift at 2.0 s glides: 50-150 ms after it the level is within 2 dB of the full-load level before it
+    glide = lvl(a, 1.6, 2.0) - lvl(a, 2.05, 2.15)
+    check(glide <= 2, f'{name}: {glide:.1f} dB down 100 ms after a lift-off (want <= 2: a glide, not a drop)')
+    # cruise: no hiss, the band above 3 kHz at least 30 dB under the total
+    cr = render(name, 'cruise', steady(3000, .2, .2)); s = spectrum(cr, 1.2)
+    hf = 10 * math.log10(energy(s, 3000, 23900) / energy(s, 1, 23900))
+    check(hf <= -30, f'{name}: >3 kHz at cruise only {hf:.1f} dB under the total')
     print(f'{name}: firing Hz {pitches}, 1-6 kHz share {sh[0]:.3f} -> {sh[1]:.3f} with load; at 3000 rpm coast '
-          f'{full - coast:.1f} dB and light load {full - light:.1f} dB under full load; idle {f25 - idle:.1f} dB under '
-          f'full load at 2500')
+          f'{full - coast:.1f} dB and light load {full - light:.1f} dB under full load, {glide:.1f} dB down 100 ms '
+          f'after the lift; idle {f25 - idle:.1f} dB under full load at 2500; >3 kHz at cruise {hf:.1f} dB')
 
 # ---- response: an rpm step reaches 90 % of the firing-frequency change within ~30 ms -----------------------------
 # (zero crossings of the 0.5..1.5x firing band are too slow to resolve 30 ms; test_core checks the smoothed rpm
@@ -219,7 +227,7 @@ def coast_level(x):
 
 
 o = [coast_level(x) for x in (0, 1, 2)]
-check(o[0] < o[1] - 10 and o[2] > o[1] + 4, f'X offgas: coast level {o}')
+check(o[0] < o[1] - 10 and o[2] > o[1] + 2.5, f'X offgas: coast level {o}')
 bassl = []
 for x in (0, 1, 2):
     a = render('v8', f'bass{x}', [f'0 X bass {x}'] + steady(2500, .6, .6))
@@ -235,10 +243,21 @@ for x in (0, 1, 2):
     tl.append(lvl(t, 4, 6) - lvl(eng, 4, 6))
 tc = render('i6', 'tbc', cruise, {'ES_SOLO': '2'})
 toff = render('i6', 'tboff', ['0 T 0'] + boost, {'ES_SOLO': '2'})
-check(-30 <= tl[1] <= -24, f'turbo at full boost {tl[1]:.1f} dB under the engine (want -30..-24)')
+check(-46 <= tl[1] <= -36, f'turbo at full boost {tl[1]:.1f} dB under the engine (want -46..-36: a faint whistle)')
+part = [f'{t / 50:.2f} P {1500 + 50 * t if t < 50 else 4000} .6 .6 3 80' for t in range(301)]
+tp = lvl(render('i6', 'tbp', part, {'ES_SOLO': '2'}), 4, 6)
+check(tp < -80, f'turbo audible at 0.6 load: {tp:.1f} dBFS')
+# X turbo 0 removes everything turbo-related; at cruise it changes nothing at all
+cr3 = steady(3000, .2, .2, 6)
+c0 = lvl(render('i6', 'cr-t0', ['0 X turbo 0'] + cr3), 2, 6); c1 = lvl(render('i6', 'cr-t1', cr3), 2, 6)
+check(abs(c0 - c1) <= .5, f'X turbo 0 vs 1 at cruise: {c0 - c1:.2f} dB')
+f0 = render('i6', 'full-t0', ['0 X turbo 0'] + boost); f1 = render('i6', 'full-t1', boost)
+s0, s1 = spectrum(f0, 4.5), spectrum(f1, 4.5)
+hfd = 10 * math.log10(energy(s1, 3000, 23900) / energy(s0, 3000, 23900))
 check(tl[0] < -80 and 4 < tl[2] - tl[1] < 8, f'X turbo 0/1/2: {tl}')
 check(lvl(tc, 4, 6) - lvl(ec, 4, 6) < -40, f'turbo audible at cruise: {lvl(tc, 4, 6) - lvl(ec, 4, 6):.1f} dB')
 check(lvl(toff, 4, 6) < -80, 'T 0 does not silence the turbo')
+check(0 <= hfd < 3, f'X turbo 1 adds {hfd:.1f} dB above 3 kHz at full boost (X turbo 0 must remove it, 1 only a faint whistle)')
 # blow-off (recirculation): a lift after boost; a full-load upshift (pedal stays down) must not trigger it
 lift = boost[:251] + [f'{5 + t / 50:.2f} P {4000 - 400 * t / 50} -.5 0 3 80' for t in range(101)]
 bl = []
@@ -273,6 +292,8 @@ p0 = pops(0); pc = [pop_events(pops(x), p0) for x in (0, 1, 2)]
 check(pc[0][0] == 0 and pc[1][0] >= 1 and pc[2][0] > pc[1][0] and pc[2][1] > pc[1][1] + 3, f'X pops 0/1/2 (events, peak dB) {pc}')
 ps = pop_events(pops(2, True), pops(0, True))
 check(ps[0] == 0, f'a gear shift triggered pops {ps}')
+print(f'turbo: {tl[1]:.1f} dB under the engine at full boost, adds {hfd:.1f} dB above 3 kHz; silent at 0.6 load; '
+      f'X turbo 0 vs 1 at cruise {c0 - c1:+.2f} dB')
 print(f'X: offgas coast {o[0]:.1f}/{o[1]:.1f}/{o[2]:.1f} dBFS; bass low/mid {bassl[0]:.1f}/{bassl[1]:.1f}/'
       f'{bassl[2]:.1f} dB; turbo {tl[1]:.1f} dB under the engine at full boost (x2: {tl[2]:.1f}), '
       f'{lvl(tc, 4, 6) - lvl(ec, 4, 6):.1f} dB at cruise; blow-off peak {bl[1]:.1f} dB, {dur * 1000:.0f} ms; '

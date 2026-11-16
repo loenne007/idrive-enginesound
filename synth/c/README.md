@@ -28,16 +28,16 @@ versions <= GLIBC_2.27 and the ELF interpreter is `/lib/ld-linux-x86-64.so.2`; t
 | Feedback | Engine C |
 |---|---|
 | Follow the rpm instantly | `P` rpm through two cascaded 6.5 ms one-poles: 90 % of a step in **26 ms** (A: 8000 rpm/s slew, ~400 ms for a 3200 rpm step). No slew limit; the corners are rounded so a step never clicks. Load/throttle: 8 ms. |
-| Shifts: crisp, no cut, no gap, nothing triggered | `S` upshift = a torque intervention, raised-cosine bump peaking at **70 ms**, gone at **180 ms**: pulses softer and less rasp (load x 0.68 for the timbre) and at most -1 dB of level. Combustion never stops. Downshift: a 160 ms rev-match accent. Pops, blow-off and tip-in bark are fired by the driver's *pedal* (which a ZF shift never moves) and additionally locked out for 0.4 s after any `S`. Measured: S events move the level by <= 2.7 dB; an upshift arriving as an rpm *step* stays within 1.1 dB of the settled levels. |
-| Off the gas not much quieter | Explicit level map: off-throttle (idle, coast, light load) **-8.6 dB** under full load at the same rpm; full load rises 6 dB from idle to redline. Measured at 3000 rpm: coast 7.6-8.5 dB, light load 7.6-8.4 dB under full load (all presets). |
-| Turbo and blow-off subtle | Turbo **-27.4 dB** under the engine at full boost, below -200 dB (nothing) at cruise; spool 0.35 s up, 0.4-0.8 s down. BMW uses recirculation valves: a single 200 ms soft whoosh (band sweeping 2.7 -> 1.4 kHz), peak -16.6 dB re the engine, no flutter. |
-| Pops & bangs on a genuine lift-off | After >= 0.6 s of load (average > 0.35) and a pedal release above 2000 rpm: a Poisson window of pressure kicks injected into the bank pipes (so they ring through the exhaust). `X pops` 0 = none, 1 = subtle (~4 per 1.5 s, at the coast level), 2 = sport exhaust (~15 per 1.5 s, up to +17 dB over the coast level, longer windows). |
+| Shifts: crisp, no cut, no gap, nothing triggered | `S` upshift = a torque intervention, raised-cosine bump peaking at **70 ms**, gone at **180 ms**: pulses softer and less rasp (load x 0.68 for the timbre) and at most -1 dB of level. Combustion never stops. Downshift: a 160 ms rev-match accent. Pops, blow-off and tip-in bark are fired by the driver's *pedal* (which a ZF shift never moves) and additionally locked out for 0.4 s after any `S`. Measured: S events move the level by <= 1.5 dB; an upshift arriving as an rpm *step* stays within 1.5 dB of the settled levels. |
+| Off the gas not much quieter, no drop on a lift | Explicit level map: off-throttle (idle, coast, light load) **-4.4 dB** under full load at the same rpm (was -8.6); full load rises 6 dB from idle to redline. On a lift the level **glides** down (linear over 0.6 s, start rounded by 0.1 s) and the timbre's load glides over 0.4 s (the manifold empties), so it sounds like the engine going onto the overrun; tip-in is quick (50 ms). Measured at 3000 rpm: coast 3.4-4.0 dB, light load 3.8-4.5 dB under full load; 100 ms after a lift the level is 0.1-1.7 dB down. |
+| Turbo and blow-off subtle, no hiss | Turbo only under real load (boost demand starts above 0.55 load): **-40.6 dB** under the engine at full boost (was -27.4), silent at 0.6 load and at cruise; it adds 1.4 dB above 3 kHz at full boost. `X turbo 0` removes the whistle, the spool air and the boost term of the shaper (cruise identical within 0.00 dB). Spool 0.35 s up, 0.4-0.8 s down. BMW uses recirculation valves: a single 200 ms soft whoosh (band sweeping 2.7 -> 1.4 kHz), peak -18 dB re the engine, no flutter; `X bov 0` silences it. The pulse rasp's band now opens with load^2: its >3 kHz part is 7 dB lower at cruise and 5-6 dB lower at part load, unchanged at full load. |
+| Pops & bangs on a genuine lift-off | After >= 0.6 s of load (average > 0.35) and a pedal release above 2000 rpm: a Poisson window of pressure kicks injected into the bank pipes (so they ring through the exhaust). `X pops` 0 = none, 1 = subtle (~2-4 per 1.5 s, around the coast level), 2 = sport exhaust (~16 per 1.5 s, up to +13 dB over the coast level, longer windows). Pops are high-passed at 150 Hz (thumps, not sub-bass) and keep their level relative to the overrun whatever the off-gas setting. |
 
 ## Sound settings (`X`, 0..2, 1 = default, smoothed with 80 ms, kept across `E`)
 
 | Name | Effect |
 |---|---|
-| `offgas` | multiplies the off-throttle level (0.37 of full load at 1, -8.6 dB): 0 = silent off the throttle, 2 = -2.6 dB |
+| `offgas` | multiplies the off-throttle level (0.60 of full load at 1, -4.4 dB): 0 = silent off the throttle, 2 = as loud as full load |
 | `turbo` | turbo whistle/air level (0 = none, 2 = +6 dB); `T 0` switches the layer off |
 | `bov` | recirculation whoosh level (0 = none) |
 | `pops` | overrun pops: 0 none, 1 subtle, 2 loud and more often |
@@ -59,7 +59,7 @@ strength COV (preset value at load, ~3x at idle), width variation, timing jitter
 accumulates). Per exhaust path the pressures are summed, differentiated per unit crank phase (what an open
 pipe radiates) and low-passed at the radiation knee (44-64 engine half-orders).
 
-**Turbulence rides on the pulses.** White noise, low-passed with load (rasp band 0.7-3 kHz) and high-passed at
+**Turbulence rides on the pulses.** White noise, low-passed with load^2 (rasp band ~0.5-3 kHz) and high-passed at
 200 Hz, is *multiplied* by the path's own summed pulse pressure (normalised) and injected with the pulses: the
 noise comes and goes with every firing, irregular with them, and rings in the same pipes (the load rasp).
 More with load and rpm, less on the overrun.
@@ -77,7 +77,7 @@ saturated sine at half the firing order (octave-folded into 38-85 Hz), fading wi
 **Loudness calibration.** Each voice is held at 24 rpm points from idle to redline at no load and at full load
 (offline, on a copy, at start-up: ~100 ms CPU for the four voices on an M-series core) and the gain that brings it
 to a fixed level is stored. The pipes keep their colour (which harmonic rings where) but no longer decide how
-loud the engine is; the explicit level map does (off-gas -8.6 dB, +6 dB to redline). The correction follows
+loud the engine is; the explicit level map does (off-gas -4.4 dB, +6 dB to redline). The correction follows
 in 40 ms, as long as the pipes' low modes need to build up after a fast rpm drop (an instant correction left a
 10 dB, 60 ms hole after a 6000 -> 2800 rpm step).
 
@@ -128,26 +128,30 @@ than Engine_Sim's.
 C 0.4/0.5/1.9/1.3 %; 5000-7000 rpm: ref 4.5/9.5/10.9/7.5 %, C 2.9/2.1/8.9/7.1 % (the V8 is duller at high
 rpm than Engine_Sim's turbo V8, whose turbo layer is loud).
 
-**Demo renders** (`samples/`): RMS -20.0..-20.9 dBFS (A: -19.4/-19.8), peaks -4.5..-5.1 dBFS, below-100 Hz
-peaks -8.8..-15 dBFS, highest 3 s RMS -16.0..-16.9 dBFS: under the shared protection's bass (-8 dBFS),
-power (-14 dBFS) and peak (-1.5 dBFS) limits at the default settings. Idle ~-29, full-load pull ~-17,
+**Demo renders** (`samples/`): RMS -19.1..-20.1 dBFS (A: -19.4/-19.8), peaks -4.4..-5.5 dBFS, below-100 Hz
+peaks -9.4..-15 dBFS, highest 3 s RMS -15.9..-16.8 dBFS: under the shared protection's bass (-8 dBFS),
+power (-14 dBFS) and peak (-1.5 dBFS) limits at the default settings (with `X pops 2` the V8's loudest bangs
+reach -6.6 dBFS below 100 Hz: the protection's bass limiter then acts on them). Idle ~-25, full-load pull ~-17,
 coast ~-27 dBFS.
 
 **Bench** (`--bench 60`, one Apple M-series core, turbo layer on for every preset): i6 431x, v8 371x,
-v10 381x, **v12 341x** realtime (engine A on the same host: 160-193x). Start-up calibration: ~100 ms CPU.
+v10 367x, **v12 329x** realtime (engine A on the same host: 160-193x). Start-up calibration: ~100 ms CPU.
 
 `test.sh` checks: rpm-step response (26 ms to 90 %), finite internal states and the -3 dBFS bound across
 extreme sweeps/preset switches/shifts/X settings; demo safety (finite, peak <= -3 dBFS, RMS window, no clicks
-by a relative sample-slope test), every demo upshift within 3 dB of the settled levels; firing pitch at
-1800/3600 rpm, V8/V10 half-order character, i6 smoothness, brightening with load; off-gas level (coast and
-light load 7-10 dB under full load at 3000 rpm); an rpm step's new firing frequency 60 ms later; S events
+by a relative sample-slope test), every demo upshift within 3.5 dB of the settled levels (engine A's demo limit; the V8's own roughness is ~3 dB there); firing pitch at
+1800/3600 rpm, V8/V10 half-order character, i6 smoothness, brightening with load; >3 kHz at cruise >= 30 dB
+under the total; the lift-off glide (100 ms after a lift within 2 dB of full load); off-gas level (coast and
+light load 3-5 dB under full load at 3000 rpm); an rpm step's new firing frequency 60 ms later; S events
 against the same drive without S (<= 3 dB) for full-load, light-load and overrun shifts, and an upshift as an
 rpm step; preset switches, X changes, S, mute and malformed lines without clicks; mute, stale-input watchdog,
-quit fade; each X setting (offgas, bass, turbo level at boost/cruise/T 0, blow-off level/length and no
+quit fade; each X setting (offgas, bass, turbo level at boost/0.6 load/cruise/T 0, X turbo 0 vs 1 at cruise
+within 0.5 dB and at boost above 3 kHz, blow-off level/length and no
 blow-off from a shift, pops 0/1/2 event counts and no pops from a shift). These are objective regressions and
 do **not** establish subjective quality, Apollo Lake CPU use or SmartX latency: that needs listening in the car.
 
-Measurement hook: `ES_SOLO=1` renders the engine only, `2` the turbo only, `3` the blow-off only.
+Measurement hook: `ES_SOLO=1` renders the engine only, `2` the turbo only, `3` the blow-off only, `4` the pulse
+rasp only (through the exhaust), `5` the engine without the rasp, `6` the induction noise only.
 
 ## Known weaknesses
 
@@ -155,10 +159,11 @@ Measurement hook: `ES_SOLO=1` renders the engine only, `2` the turbo only, `3` t
 - V10/V12 are lighter below 100 Hz than Engine_Sim's renders; V12 is more periodic than the reference.
 - The V8's half-order (burble) share rises with rpm (it comes from the two banks' different pulse shapes
   meeting slightly different pipes); at idle it is modest.
-- Steady states between the calibration points: the off-gas gap measured 5.9-10.9 dB over 1500-6500 rpm
-  (7-9 dB at most points; the 3000 rpm test point 7.6-8.5 dB).
+- Steady states between the calibration points: the off-gas gap measured 2.1-7.2 dB over 1500-6500 rpm
+  (3-5 dB at most points; the 3000 rpm test point 3.4-4.5 dB).
+- The lift-off glide check is tightest on the V8 (1.7 dB of the 2 dB allowed): its own roughness is +-1 dB.
 - Start-up costs ~100 ms CPU here (perhaps 0.4-0.5 s on the head unit's Atom) before the first block.
-- The turbo whistle is a narrow band at 1.4-4.6 kHz; the blow-off has no BMW-specific recording behind it.
+- The turbo whistle is a narrow band at 1.4-4.6 kHz, now faint; the blow-off has no BMW-specific recording behind it.
 
 ## Credits and licenses
 

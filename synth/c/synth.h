@@ -109,6 +109,7 @@ typedef struct {
     float spool, whine_ph, tb_lvl, tb_hz, bov_env, bov_t, bov_peak, thr_slow, bov_armed;
     Biquad tb_band, tb_air, tb_lp, bov_bp;
     /* pops */
+    float pop_hp, pop_norm;
     float load_avg, pop_t, pop_rate, pop_amp, pop_env, pop_dec, pop_lp, pop_lp2;
     int pop_armed, pop_bank;
     /* tip-in */
@@ -117,7 +118,9 @@ typedef struct {
     float x, h, rasp_g, rasp_fc, nz_norm, nl_drive, nl_mk, lvl, lvl_full, f0, lpk, ripple, sub_g, sub_order;
     float in_hg, in_dg, in_ng, in_norm, rpm_n, over, tb_bnorm, tb_anorm, bov_norm, bov_tgt;
     float corr[2][NCAL];  /* loudness calibration: no load, full load */
-    float corr_s;         /* the applied correction, smoothed */
+    float corr_s, corr_l, corr_h; /* the applied correction; its no-load and full-load parts, smoothed */
+    float xl_s, xl_s2;    /* the level map's load: quick up, gliding down (linear, then rounded) */
+    float x_glide;        /* the timbre's load, gliding down after a lift */
     float weight;         /* crossfade weight */
     unsigned tick;
 } Voice;
