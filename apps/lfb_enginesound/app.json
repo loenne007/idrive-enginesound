@@ -40,7 +40,8 @@
       "_methods": [
         "connect",
         "disconnect",
-        "getListMainConnections"
+        "getListMainConnections",
+        "getListMainSources"
       ]
     },
     "org.genivi.am.routinginterface.RoutingControlObserver": {
@@ -154,6 +155,12 @@
     {
       "key": "sportOnly",
       "label": "Only in Sport mode",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "mix",
+      "label": "Play over music (mix)",
       "type": "bool",
       "default": false
     },
