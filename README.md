@@ -59,6 +59,18 @@ A new engine: a new `synth/<id>/` (same command line and control lines, see [syn
 the tool's `component.json` `files`, its entry in `SOUND_ENGINES` (`apps/lfb_enginesound/core.js`) and in the
 `soundEngine` setting (`app.json`).
 
+## Sound page
+
+Sliders (0–200 %, 100 % = the engine's own default) for **Off the gas** (idle, coasting, light load), **Turbo**,
+**Blow-off**, **Pops & bangs** and **Bass**; also in Settings. Whatever they are set to, the speaker protection
+(below) keeps the output safe.
+
+## Speaker protection
+
+The last stage of every sound engine (`synth/common/protect.h`): no DC or infrasound (30 Hz high-pass), nothing
+above 16 kHz, the bass below ~100 Hz held under -8 dBFS, the long-term power held under -14 dBFS RMS, peaks under
+-1 dBFS, and a fade-in at start.
+
 ## Settings
 
 | Setting | |

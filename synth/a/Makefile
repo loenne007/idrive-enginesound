@@ -1,10 +1,10 @@
 CC ?= cc
 ZIG ?= $(HOME)/.local/zig/zig-aarch64-macos-0.17.1/zig
 SRC = main.c synth.c engine.c presets.c out_alsa.c
-FLAGS = -std=c99 -O2 -Wall -Wextra -Wpedantic
+FLAGS = -std=c99 -O2 -Wall -Wextra -Wpedantic -I../common
 .PHONY: host car clean
 host: build/es-synth-host
-build/es-synth-host: $(SRC) synth.h dsp.h out_alsa.h
+build/es-synth-host: $(SRC) synth.h dsp.h out_alsa.h ../common/protect.h
 	mkdir -p build
 	$(CC) $(FLAGS) $(SRC) -o $@ -lm
 # the engine's id: this folder's name; the car binary is tool/lfb-enginesound/es-synth-<id>

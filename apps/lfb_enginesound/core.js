@@ -27,6 +27,16 @@ const SOUND_ENGINES = [
 
 const { DEVICE } = require('./route');
 
+/* The sound settings (Sound page): app setting key -> the synth's X name (synth/PROTOCOL.md). Stored in percent,
+ * 0..200, 100 = the engine's own default; sent as multipliers 0..2. */
+const SOUND_SETTINGS = [
+    { key: 'xOffgas', name: 'offgas', label: 'Off the gas', sub: 'idle, coasting, light load' },
+    { key: 'xTurbo', name: 'turbo', label: 'Turbo', sub: 'whistle and spool' },
+    { key: 'xBov', name: 'bov', label: 'Blow-off', sub: 'whoosh when lifting after boost' },
+    { key: 'xPops', name: 'pops', label: 'Pops & bangs', sub: 'on the overrun' },
+    { key: 'xBass', name: 'bass', label: 'Bass', sub: 'low end' },
+];
+
 const ENGINE_RUNS = 400;      // rpm: below = engine off
 const RELEASE_MS = 4000;      // muted this long: the audio route goes back to the car
 const SEND_MS = 20;           // P lines at 50 Hz
@@ -43,7 +53,7 @@ class Core {
         this.idle = 800;          // the car's idle, learned at a standstill
         this.out = { rpm: 0, load: 0, throttle: 0, gear: 0 };
         this.playing = false; this.reason = 'starting'; this.mutedAt = this.now(); this.routed = false; this.lastGear = undefined;
-        this.testUntil = 0;
+        this.testUntil = 0; this.lastP = 0;
         this.timer = null;
     }
 
@@ -52,6 +62,9 @@ class Core {
     /* ---------- inputs ---------- */
     feed(d) {
         const t = this.now();
+        // a new rpm or torque goes to the synth at once (not only on the 50 Hz tick): a gear change sounds as quick
+        // as the car sends it
+        const fresh = num(d.rpm) || (d.torque !== undefined && num(d.torque));
         if (num(d.rpm)) { this.d.rpm = d.rpm; this.d.rpmT = t; }
         if (num(d.speed)) this.d.speed = d.speed;
         if (d.torque !== undefined) this.d.torque = num(d.torque) ? d.torque : null;
@@ -63,6 +76,7 @@ class Core {
             if (this.lastGear !== undefined && g !== this.lastGear && g > 0 && this.lastGear > 0) this.daemon.send('S ' + this.lastGear + ' ' + g);
             this.lastGear = g; this.d.gear = g;
         }
+        if (fresh && this.playing && t - this.lastP >= 8) this._sendP();
         // the car's idle: rpm at a standstill, engine warm and settled (diesel 750-900)
         if (num(this.d.rpm) && this.d.speed !== null && this.d.speed < 1 && this.d.rpm > 550 && this.d.rpm < 1100 && (!num(this.d.torque) || this.d.torque < 60)) {
             this.idle += (this.d.rpm - this.idle) * 0.01;
@@ -110,10 +124,16 @@ class Core {
         this.daemon.send('E ' + p);
         this.daemon.send('T ' + (PRESETS[p].turbo && this.settings.get('turbo') !== false ? 1 : 0));
         this.daemon.send('V ' + (clamp(Number(this.settings.get('volume')) || 60, 0, 100) / 100).toFixed(2));
+        SOUND_SETTINGS.forEach((x) => this.daemon.send('X ' + x.name + ' ' + this.soundSetting(x.key).toFixed(2)));
     }
+
+    /** A sound setting as the synth's multiplier, 0..2. */
+    soundSetting(key) { const v = Number(this.settings.get(key)); return isFinite(v) && this.settings.get(key) !== undefined ? clamp(v / 100, 0, 2) : 1; }
 
     onSetting(key) {
         if (key === 'engine' || key === 'turbo' || key === 'volume' || key === 'soundEngine') this._applySettings();
+        const x = SOUND_SETTINGS.find((s) => s.key === key);
+        if (x) this.daemon.send('X ' + x.name + ' ' + this.soundSetting(key).toFixed(2));
     }
 
     tick() {
@@ -123,15 +143,20 @@ class Core {
         if (why !== this.reason) { this.log.info('sound: ' + (why || 'playing')); this.reason = why; }
         if (!why) {
             if (!this.playing) { this.playing = true; this._route(true); this.daemon.send('M 0'); }
-            const rpm = this.virtualRpm(this.d.rpm), load = this.load(this.d.torque);
-            // throttle: what the driver asks; the torque follows it closely in a turbo diesel
-            const thr = clamp(load * 1.15, 0, 1);
-            this.out = { rpm, load, throttle: thr, gear: this.d.gear === undefined ? 0 : this.d.gear };
-            this.daemon.send('P ' + rpm.toFixed(1) + ' ' + load.toFixed(3) + ' ' + thr.toFixed(3) + ' ' + this.out.gear + ' ' + (num(this.d.speed) ? this.d.speed.toFixed(1) : '0'));
+            if (t - this.lastP >= 15) this._sendP();
         } else {
             if (this.playing) { this.playing = false; this.mutedAt = t; this.daemon.send('M 1'); }
             if (this.routed && t - this.mutedAt > RELEASE_MS) this._route(false);
         }
+    }
+
+    _sendP() {
+        const rpm = this.virtualRpm(this.d.rpm), load = this.load(this.d.torque);
+        // throttle: what the driver asks; the torque follows it closely in a turbo diesel
+        const thr = clamp(load * 1.15, 0, 1);
+        this.out = { rpm, load, throttle: thr, gear: this.d.gear === undefined ? 0 : this.d.gear };
+        this.lastP = this.now();
+        this.daemon.send('P ' + rpm.toFixed(1) + ' ' + load.toFixed(3) + ' ' + thr.toFixed(3) + ' ' + this.out.gear + ' ' + (num(this.d.speed) ? this.d.speed.toFixed(1) : '0'));
     }
 
     _route(on) {
@@ -161,4 +186,4 @@ class Core {
     }
 }
 
-module.exports = { Core, PRESETS, ORDER, SOUND_ENGINES };
+module.exports = { Core, PRESETS, ORDER, SOUND_ENGINES, SOUND_SETTINGS };

@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "out_alsa.h"
 #include "synth.h"
+#include "protect.h" /* synth/common: speaker protection */
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
@@ -87,6 +88,7 @@ int main(int argc, char **argv) {
     FILE *fp = 0, *sf = 0;
     Synth s;
     Alsa alsa = {0};
+    Protect prot;
     int16_t buf[BLOCK * 2];
     uint64_t frames = 0;
     double script_at = 0;
@@ -190,6 +192,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     alsa_out = !strncmp(out, "alsa:", 5);
+    protect_init(&prot);
     synth_init(&s, p, volume);
     signal(SIGINT, handler);
     signal(SIGTERM, handler);
@@ -257,6 +260,8 @@ int main(int argc, char **argv) {
             s.time += n / (double)SR;
         } else
             synth_render(&s, buf, n);
+            /* (the tone too) */
+        protect_run(&prot, buf, n); /* speaker protection, last stage */
         if (fp) {
             if (fwrite(buf, 4, n, fp) != n) {
                 perror("write");

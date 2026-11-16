@@ -34,3 +34,11 @@ Unknown names are ignored.
 
 The sound follows the `P` rpm with at most about 30 ms of smoothing (no slow slew limits): a gear change must
 sound as quick as it is in the car. The output buffer adds the device's own latency (SmartX: 64 ms).
+
+## Speaker protection
+
+Every engine's `main.c` runs `synth/common/protect.h` as its last stage, before every output (ALSA, WAV, raw):
+a 4th-order 30 Hz high-pass (no DC / infrasound), a 16 kHz low-pass, a bass limiter (below ~100 Hz held under
+-8 dBFS), a power limiter (3 s RMS under -14 dBFS), a 1 ms look-ahead peak limiter and a soft clip under -1 dBFS,
+and a fade-in at start. `tools/add_protect.py synth/<id>` puts it into a new engine; `make -C synth test` tests it
+(`common/test_protect.c`).

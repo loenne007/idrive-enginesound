@@ -14,12 +14,14 @@ const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
 const { withAlpha } = require('./kit/canvas');
 const Car = require('./kit/car');
-const { Core, PRESETS, ORDER, SOUND_ENGINES } = require('./core');
+const { Core, PRESETS, ORDER, SOUND_ENGINES, SOUND_SETTINGS } = require('./core');
 const { Daemon } = require('./daemon');
 const { Route } = require('./route');
 
 const W = 1600, H = 520;
-const TABS = ['Engine'];
+const TABS = ['Engine', 'Sound'];
+// the Sound page's sliders: track from SX0 to SX1, one row per setting
+const SX0 = 520, SX1 = 1290, ROW0 = 112, ROWH = 76;
 const VOLS = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
 const FES = 'de.bmw.infotainment.drivingexcitement.FES';
 // FES torque: 12 bit, 0.5 Nm per bit, 0 Nm at raw 2047, 4095 = no value (kit/runtime/car.js)
@@ -66,7 +68,7 @@ mgu.run({
     async start(ctx) {
         const { ui, settings, log } = ctx;
         const { core, daemon, route } = ctx.background || await background(ctx);
-        let dirty = true;
+        let dirty = true, page = 0;
         const redraw = () => { dirty = true; return render(); };
 
         const step = (key, list, d) => {
@@ -149,21 +151,51 @@ mgu.run({
             cv.text(cur.sub + (PRESETS[core.preset()].turbo ? ' - turbo ' + (settings.get('turbo') !== false ? 'on' : 'off') : ''), 1100, 502, 15, t.dim);
         }
 
+        /* ---------- Sound page: sliders for the X settings ---------- */
+        const setPct = (key, v) => { settings.set(key, Math.max(0, Math.min(200, Math.round(v / 5) * 5))); return redraw(); };
+        function drawSound(cv, t) {
+            G.panel(cv, t, 24, 44, 1552, 468, 'Sound');
+            G.button(cv, t, 1380, 58, 180, 40, 'Reset all', () => { SOUND_SETTINGS.forEach((x) => settings.set(x.key, 100)); return redraw(); }, { key: 'reset' });
+            SOUND_SETTINGS.forEach((x, i) => {
+                const y = ROW0 + i * ROWH, v = Math.round(core.soundSetting(x.key) * 100);
+                cv.text(x.label, 48, y + 26, 24, t.text, { font: 'bold' });
+                cv.text(x.sub, 48, y + 50, 16, t.dim);
+                // track, the default (100 %) mark, the filled part and the knob
+                const ty = y + 22, fx = SX0 + (SX1 - SX0) * v / 200;
+                cv.roundRect(SX0, ty, SX1 - SX0, 14, 7, withAlpha('#ffffff', 0.1));
+                cv.roundRect(SX0, ty, Math.max(14, fx - SX0), 14, 7, v === 0 ? t.dim : t.accent);
+                cv.fillRect(SX0 + (SX1 - SX0) / 2 - 1, ty - 6, 2, 26, withAlpha('#ffffff', 0.35));
+                cv.circle(fx, ty + 7, 15, '#ffffff');
+                cv.text(v === 0 ? 'OFF' : v + '%', 1350, y + 34, 24, v === 100 ? t.dim : t.text, { align: 'center', font: 'bold' });
+                G.button(cv, t, 1400, y + 6, 70, 48, '-', () => setPct(x.key, v - 10), { key: x.key + '-' });
+                G.button(cv, t, 1484, y + 6, 70, 48, '+', () => setPct(x.key, v + 10), { key: x.key + '+' });
+            });
+        }
+        // a tap on a slider's track sets it there
+        if (ctx.onTap) {
+            ctx.onTap((x, y) => {
+                if (page !== 1 || x < SX0 - 20 || x > SX1 + 20) return null;
+                const i = Math.floor((y - ROW0) / ROWH);
+                if (i < 0 || i >= SOUND_SETTINGS.length) return null;
+                return setPct(SOUND_SETTINGS[i].key, (x - SX0) / (SX1 - SX0) * 200);
+            });
+        }
+
         async function render() {
             const t = ctx.theme(), cv = ctx.canvas(W, H).clear(t.bg);
-            drawEngine(cv, t);
-            G.frame(cv, t, TABS, 0, [core.d.demo && { text: 'DEMO' }]);
+            (page === 1 ? drawSound : drawEngine)(cv, t);
+            G.frame(cv, t, TABS, page, [core.d.demo && { text: 'DEMO' }]);
             dirty = false;
             await ui.image('MAIN_GFX', cv);
         }
-        ctx.onTab(() => redraw());
+        ctx.onTab((i) => { page = i; return redraw(); });
         daemon.on('change', () => { dirty = true; });
         settings.onChange(() => { dirty = true; });
         let last = 0;
         ctx.loop('MAIN', 10, () => {
             const n = Date.now();
             // the live numbers: 10 times a second on the Engine page
-            if (dirty || n - last > 100) { last = n; return render(); }
+            if (dirty || (page === 0 && n - last > 100)) { last = n; return render(); }
             return null;
         });
         render().catch((e) => log.warn('first render: ' + e));

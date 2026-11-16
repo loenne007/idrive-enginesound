@@ -2,7 +2,7 @@
   "id": "lfb_enginesound",
   "title": "Engine Sound",
   "description": "A synthesized petrol engine (inline-6, V8, V10, V12) on the car's speakers, following the car's real rpm, gear and load",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "vendor": "loenne007",
   "license": "MIT",
   "loggingId": "LFES",
@@ -12,7 +12,7 @@
   ],
   "autostart": true,
   "requires": {
-    "lfb-enginesound": "0.5.0"
+    "lfb-enginesound": "0.6.0"
   },
   "signals": {
     "de.bmw.infotainment.vehicle.CDS": {
@@ -152,6 +152,96 @@
       "label": "Turbo sound (inline-6, V8)",
       "type": "bool",
       "default": true
+    },
+    {
+      "key": "xOffgas",
+      "label": "Sound: off the gas",
+      "type": "number",
+      "unit": "%",
+      "default": 100,
+      "steps": [
+        0,
+        25,
+        50,
+        75,
+        100,
+        125,
+        150,
+        175,
+        200
+      ]
+    },
+    {
+      "key": "xTurbo",
+      "label": "Sound: turbo",
+      "type": "number",
+      "unit": "%",
+      "default": 100,
+      "steps": [
+        0,
+        25,
+        50,
+        75,
+        100,
+        125,
+        150,
+        175,
+        200
+      ]
+    },
+    {
+      "key": "xBov",
+      "label": "Sound: blow-off",
+      "type": "number",
+      "unit": "%",
+      "default": 100,
+      "steps": [
+        0,
+        25,
+        50,
+        75,
+        100,
+        125,
+        150,
+        175,
+        200
+      ]
+    },
+    {
+      "key": "xPops",
+      "label": "Sound: pops & bangs",
+      "type": "number",
+      "unit": "%",
+      "default": 100,
+      "steps": [
+        0,
+        25,
+        50,
+        75,
+        100,
+        125,
+        150,
+        175,
+        200
+      ]
+    },
+    {
+      "key": "xBass",
+      "label": "Sound: bass",
+      "type": "number",
+      "unit": "%",
+      "default": 100,
+      "steps": [
+        0,
+        25,
+        50,
+        75,
+        100,
+        125,
+        150,
+        175,
+        200
+      ]
     },
     {
       "key": "rpmMap",
