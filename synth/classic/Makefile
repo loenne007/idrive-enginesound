@@ -14,8 +14,8 @@ car: build/es-synth
 	cp build/es-synth $(OUT)
 	file $(OUT)
 	python3 check_glibc.py $(OUT)
-build/es-synth: $(SRC) synth.h dsp.h out_alsa.h
+build/es-synth: $(SRC) synth.h dsp.h out_alsa.h Makefile
 	mkdir -p build
-	$(ZIG) cc -target x86_64-linux-gnu.2.27 $(FLAGS) -s $(SRC) -o $@ -ldl -lm
+	$(ZIG) cc -target x86_64-linux-gnu.2.27 $(FLAGS) -s -Wl,--dynamic-linker=/lib/ld-linux-x86-64.so.2 $(SRC) -o $@ -ldl -lm
 clean:
 	rm -rf build

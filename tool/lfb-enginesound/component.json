@@ -1,7 +1,7 @@
 {
   "id": "lfb-enginesound",
   "kind": "tool",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "Engine Sound service",
   "description": "Synthesizes the engine sound (inline-6, V8, V10, V12) live from the car's rpm, gear and load and plays it on the car's speakers through SmartX; several sound engines to compare; driven by the Engine Sound app",
   "license": "MIT",
