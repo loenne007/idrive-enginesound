@@ -1,7 +1,7 @@
 'use strict';
 /**
- * Engine Sound - a synthesized petrol engine (inline-6, V8, V10, V12) on the car's speakers, following the car's
- * real rpm, gear and load.
+ * Engine Sound - a synthesized engine sound (inline-6, V8, V10, V12, or bass for the diesel) on the car's speakers,
+ * following the car's real rpm, gear and load.
  *
  * The app runs from the platform's start (app.json "autostart"): background() reads the car, drives the synthesizer
  * service (tool lfb-enginesound, see core.js / daemon.js) and the car's audio routing (route.js), with the app closed.
