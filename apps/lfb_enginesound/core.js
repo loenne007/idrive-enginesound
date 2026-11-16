@@ -22,7 +22,6 @@ const ORDER = ['i6', 'v8', 'v10', 'v12'];
  * engines; the service plays the chosen one (ENGINE <id>). */
 const SOUND_ENGINES = [
     { id: 'a', title: 'A', sub: 'Engine_Sim style, rewritten' },
-    { id: 'b', title: 'B', sub: 'Engine_Sim, ported 1:1' },
     { id: 'c', title: 'C', sub: 'light and quick' },
     // D emulates factory Active Sound Design: it enriches the car's own diesel, so it gets the REAL rpm, and its four
     // presets are diesel characters (shown with these names)
