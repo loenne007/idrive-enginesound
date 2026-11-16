@@ -15,9 +15,10 @@
  *   TONE <alsa device>       routing test: 10 s of beeps into that device (the synth is paused meanwhile)
  *   STATUS                   one JSON status line back
  *   SHM                      the SmartX endpoints found in /dev/shm, as JSON
- * Every other line (P / E / T / V / M / S, see synth/PROTOCOL.md) goes to the synth's stdin as it is. The last
- * E / T / V / M lines are replayed when the synth starts again, so a restart keeps the engine, turbo, volume and
- * mute state. Replies are single JSON lines starting with '{'.
+ * Every other line (P / E / T / V / M / S / X, see synth/PROTOCOL.md) goes to the synth's stdin as it is. The last
+ * E / T / V / M line and the last X line of every sound setting are replayed when the synth starts again, so a
+ * restart keeps the preset, turbo, volume, mute state and the sound settings. Replies are single JSON lines
+ * starting with '{'.
  *
  * Runs as nobody with the groups mgu_alsa (SmartX shared memory) and tm_oap_app (the socket), see the unit file.
  */
@@ -46,6 +47,12 @@ function synthPath() {
 }
 const SHM = process.env.ES_SHM || '/dev/shm';
 const STICKY = ['E', 'T', 'V', 'M'];
+/** The key a line is kept under for the replay: E / T / V / M, "X <name>" per sound setting; null: not kept. */
+function stickyKey(line) {
+    const w = line.split(/\s+/);
+    if (w[0] === 'X') return /^[a-z0-9_]+$/.test(w[1] || '') ? 'X ' + w[1] : null;
+    return STICKY.indexOf(w[0]) >= 0 ? w[0] : null;
+}
 
 const log = (m) => process.stderr.write(new Date().toISOString().slice(11, 19) + ' esd: ' + m + '\n');
 
@@ -88,7 +95,8 @@ function startSynth() {
         if (state.child === child) state.child = null;
         startSynth();
     });
-    STICKY.forEach((k) => { if (state.sticky[k]) toSynth(state.sticky[k]); });
+    // the kept lines: E / T / V / M in this order, then the sound settings
+    STICKY.concat(Object.keys(state.sticky).filter((k) => k.charAt(0) === 'X')).forEach((k) => { if (state.sticky[k]) toSynth(state.sticky[k]); });
 }
 
 function stopSynth(cb) {
@@ -184,8 +192,10 @@ function handle(line, reply) {
     if (cmd === 'TONE') return arg && tone(arg);
     if (cmd === 'STATUS') return reply(status());
     if (cmd === 'SHM') return reply(Object.assign({ type: 'shm' }, shmEndpoints()));
-    if (!/^[PETVMS]$/.test(cmd)) return;
-    if (STICKY.indexOf(cmd) >= 0) state.sticky[cmd] = line;
+    if (!/^[PETVMSX]$/.test(cmd)) return;
+    const k = stickyKey(line);
+    if (cmd === 'X' && !k) return;      // (no sound setting's name)
+    if (k) state.sticky[k] = line;
     toSynth(line);
 }
 

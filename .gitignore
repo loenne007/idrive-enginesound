@@ -8,8 +8,9 @@ dist/
 *.tgz
 # app previews (kit/tools/preview.js)
 /preview/
-# the sound engines' build folders (each synth/<id>/.gitignore too)
+# the sound engines' build folders and their renders (make -C synth test; the app's five sounds are in samples/)
 synth/*/build/
+synth/*/samples/
 # local stuff
 *.pem
 *.key

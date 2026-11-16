@@ -19,9 +19,9 @@ more "tonal" than the result in the cabin.
 
 ```
 make host            # build/es-synth-host
-./test.sh            # internal checks, renders samples/, spectral checks, benchmark
+make test            # internal checks, renders samples/, spectral checks, benchmark
 make car             # zig cc -target x86_64-linux-gnu.2.27, loader /lib/ld-linux-x86-64.so.2 -> ../../tool/lfb-enginesound/es-synth-enhance
-./render_all.sh      # samples/{i6,v8,v10,v12}.wav: 40 s mono demo drives
+make samples         # samples/{i6,v8,v10,v12}.wav: 40 s mono demo drives
 ```
 
 The command line and the stdin protocol are those of `PROTOCOL.md` (`P/E/T/V/M/S/X/Q`, `--out alsa:|wav:|raw`,
@@ -154,7 +154,7 @@ load). These are design targets, not recovered factory calibrations.
   slowly. It grows on the overrun.
 * `v12`: the same V6 TDI with more half orders, a deeper lump, a little more definition under load, and more pops.
 
-## Measurements (test.sh, this host)
+## Measurements (make test, this host)
 
 | | i6 | v8 | v10 | v12 |
 |---|---|---|---|---|

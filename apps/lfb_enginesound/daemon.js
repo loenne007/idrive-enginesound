@@ -1,8 +1,9 @@
 'use strict';
 /**
  * daemon.js - the line protocol to the Engine Sound service (tool lfb-enginesound, esd.js) on its Unix socket.
- * Reconnects by itself; send() while disconnected drops the line, except the sticky ones (ENGINE/OUT/E/T/V/M), which are
- * sent again on every (re)connect so the service always has the app's state.
+ * Reconnects by itself; send() while disconnected drops the line, except the sticky ones (ENGINE / OUT / E / T / V / M and
+ * the X line of every sound setting), which are sent again on every (re)connect so the service always has the app's
+ * state.
  */
 const net = require('net');
 const EventEmitter = require('events');
@@ -27,7 +28,7 @@ class Daemon extends EventEmitter {
         s.on('connect', () => {
             this.connected = true; this.fails = 0;
             this.log.info('service: connected');
-            STICKY.forEach((k) => { if (this.sticky[k]) s.write(this.sticky[k] + '\n'); });
+            STICKY.concat(Object.keys(this.sticky).filter((k) => k.charAt(0) === 'X')).forEach((k) => { if (this.sticky[k]) s.write(this.sticky[k] + '\n'); });
             s.write('STATUS\nSHM\n');
             this.emit('change');
         });
@@ -53,8 +54,8 @@ class Daemon extends EventEmitter {
     }
 
     send(line) {
-        const k = line.split(' ')[0];
-        if (STICKY.indexOf(k) >= 0) this.sticky[k] = line;
+        const w = line.split(' '), k = w[0] === 'X' ? 'X ' + w[1] : w[0];     // (a sound setting: kept per name)
+        if (w[0] === 'X' || STICKY.indexOf(k) >= 0) this.sticky[k] = line;
         if (this.connected && this.sock) { try { this.sock.write(line + '\n'); } catch (e) { /* reconnects */ } }
     }
 }

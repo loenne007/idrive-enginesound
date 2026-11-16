@@ -14,9 +14,9 @@ agree within 0.15-0.33 dB on average (see Validation).
 
 ```
 make host          # build/es-synth-host
-./test.sh          # unit + render checks, renders samples/, prints the benchmark
+make test          # unit + render checks, renders samples/, prints the benchmark
 make car           # x86-64 ELF (zig cc, glibc <= 2.27, interpreter /lib/ld-linux-x86-64.so.2)
-./render_all.sh    # samples/{i6,v8,v10,v12}.wav, 40 s demo each
+make samples       # samples/{i6,v8,v10,v12}.wav, 40 s demo each
 ```
 
 `make car` uses `$(HOME)/.local/zig/zig-aarch64-macos-0.17.1/zig` (override `ZIG`) with

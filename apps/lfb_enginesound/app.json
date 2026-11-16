@@ -1,7 +1,7 @@
 {
   "id": "lfb_enginesound",
   "title": "Engine Sound",
-  "description": "A synthesized engine sound (inline-6, V8, V10, V12, or bass for the diesel) on the car's speakers, following the car's real rpm, gear and load; exclusive or over the music",
+  "description": "A synthesized engine sound (Inline 6, V8, V12, or bass for the car's own diesel) on the car's speakers, following the car's real rpm, gear and load; exclusive or over the music",
   "version": "1.2.0",
   "vendor": "loenne007",
   "license": "MIT",
@@ -60,7 +60,7 @@
         ],
         [
           "BTN_ENGINE",
-          "Next engine"
+          "Next sound"
         ],
         [
           "BTN_TEST",
@@ -176,7 +176,7 @@
     },
     {
       "key": "turbo",
-      "label": "Turbo sound (inline-6, V8)",
+      "label": "Turbo sound (Inline 6, V8)",
       "type": "bool",
       "default": true
     },
@@ -196,7 +196,8 @@
         150,
         175,
         200
-      ]
+      ],
+      "reset": 1
     },
     {
       "key": "xTurbo",
@@ -214,7 +215,8 @@
         150,
         175,
         200
-      ]
+      ],
+      "reset": 1
     },
     {
       "key": "xBov",
@@ -232,7 +234,8 @@
         150,
         175,
         200
-      ]
+      ],
+      "reset": 1
     },
     {
       "key": "xPops",
@@ -250,7 +253,8 @@
         150,
         175,
         200
-      ]
+      ],
+      "reset": 1
     },
     {
       "key": "xBass",
@@ -268,7 +272,8 @@
         150,
         175,
         200
-      ]
+      ],
+      "reset": 1
     },
     {
       "key": "rpmMap",

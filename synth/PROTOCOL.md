@@ -58,5 +58,5 @@ Every engine's `main.c` runs `synth/common/protect.h` as its last stage, before 
 first a +6 dB live gain (radio loudness; `ES_LIVE_GAIN_DB` 0..20 overrides; WAV renders keep the engine's own level
 unless `ES_LIVE_GAIN` is set), then a 4th-order 30 Hz high-pass (no DC / infrasound), a 16 kHz low-pass, a bass
 limiter (below ~150 Hz held under -3 dBFS), a power limiter (3 s RMS under -8 dBFS), a 1 ms look-ahead peak limiter
-and a soft clip under -1 dBFS, and a fade-in at start. `tools/add_protect.py synth/<id>` puts it into a new engine;
-`make -C synth test` tests it (`common/test_protect.c`, with and without the live gain).
+and a soft clip under -1 dBFS, and a fade-in at start. `make -C synth test` tests it
+(`common/test_protect.c`, with and without the live gain).

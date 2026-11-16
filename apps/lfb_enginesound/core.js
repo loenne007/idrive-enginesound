@@ -314,4 +314,4 @@ class Core {
     }
 }
 
-module.exports = { Core, PRESETS, ORDER, SOUNDS, SOUND_ENGINES, SOUND_SETTINGS, DEFAULT_SOUND_ENGINE, LEGACY_SOUND_ENGINES, soundEngineId, soundEngineOf };
+module.exports = { Core, PRESETS, ORDER, SOUNDS, SOUND_ENGINES, SOUND_SETTINGS, soundEngineId };

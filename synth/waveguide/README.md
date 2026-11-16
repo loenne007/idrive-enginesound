@@ -12,9 +12,9 @@ interleaved stereo (identical L/R). The shared speaker protection
 
 ```
 make host
-./test.sh
+make test
 make car
-./render_all.sh
+make samples
 ```
 
 `make host` produces `build/es-synth-host`. `make car` uses
@@ -26,7 +26,7 @@ the loader; the symbols go to `build/glibc-symbols.txt`).
 Both targets use only libc and libm; Linux also links libdl. Python 3, without
 third-party packages, supports offline verification and sample packaging.
 
-`test.sh` checks internal floating-point DSP states (pulses, waveguides,
+`make test` checks internal floating-point DSP states (pulses, waveguides,
 compressor) on extreme RPM/load/throttle sweeps with shifts and turbo,
 limiter bounds, all four demo levels, relative sample-slope outliers, firing
 pitch at 1,800 and 3,600 RPM, spectral brightening under load, V8 half orders /
@@ -42,7 +42,7 @@ all presets. FFT tests use Hann windows and are objective regressions, not a
 substitute for listening. `build/` contains additional stereo test renders.
 
 The four `samples/*.wav` are the 40-second demo drives as **mono** PCM
-(3,840,044 bytes each): `render_all.sh` renders the normal stereo file and drops
+(3,840,044 bytes each): `make samples` renders the normal stereo file and drops
 the identical right channel. Live and normal WAV output remain stereo.
 
 ## Use

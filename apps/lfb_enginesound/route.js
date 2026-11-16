@@ -289,4 +289,4 @@ class Route {
     }
 }
 
-module.exports = { Route, EXCLUSIVE, MIX_DEFAULT, MIX_WORDS, SINK, deviceFor, mixCandidates, mixRoute, routeFor, sameRoute, stateName };
+module.exports = { Route, EXCLUSIVE, MIX_DEFAULT, SINK, deviceFor, mixCandidates, mixRoute, routeFor, sameRoute };

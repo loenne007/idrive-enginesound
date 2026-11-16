@@ -15,9 +15,9 @@ only adds the `ES_SOLO` measurement hook and runs `--bench` with the turbo on. T
 
 ```
 make host        # build/es-synth-host
-./test.sh        # test_core, render samples, check.py, bench
+make test        # test_core, render samples, check.py, bench
 make car         # zig cc -target x86_64-linux-gnu.2.27, loader /lib/ld-linux-x86-64.so.2 -> ../../tool/lfb-enginesound/es-synth-simulate
-./render_all.sh  # samples/{i6,v8,v10,v12}.wav: 40 s demo drives, mono (3.84 MB each)
+make samples     # samples/{i6,v8,v10,v12}.wav: 40 s demo drives, mono (3.84 MB each)
 ```
 
 `make car` copies the stripped ELF to `tool/lfb-enginesound/es-synth-simulate` and runs `tools/check_glibc.py` (all symbol
@@ -184,7 +184,7 @@ stay idle: more than this engine's crest factor allows without audible limiting)
 **Bench** (`--bench 60`, one Apple M-series core, turbo layer on for every preset): i6 275x, v8 242x,
 v10 249x, **v12 231x** realtime (Waveguide on the same host: 160-193x). Start-up calibration: ~290 ms CPU.
 
-`test.sh` checks: rpm-step response (26 ms to 90 %), finite internal states and the -3 dBFS bound across
+`make test` checks: rpm-step response (26 ms to 90 %), finite internal states and the -3 dBFS bound across
 extreme sweeps/preset switches/shifts/X settings; demo safety (finite, peak <= -3 dBFS, RMS window, no clicks
 by a relative sample-slope test), every demo upshift within 3.5 dB of the settled levels (the Waveguide engine's demo limit; the V8's own roughness is ~3 dB there); firing pitch at
 1800/3600 rpm, V8/V10 half-order character, i6 smoothness (orders above 150 Hz), brightening with load; the low

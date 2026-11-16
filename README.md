@@ -56,8 +56,9 @@ engine and preset, the older **Waveguide** and **Replica** included.
 | `replica` | **Replica** (legacy) | The Engine_Sim website's sound engine ported 1:1 to C (its Web Audio nodes rebuilt as Chrome runs them), driven by the car's data, with automatic-gearbox shifts and a quiet turbo. The heaviest on the CPU (~35x realtime on a Mac). [synth/replica](synth/replica/README.md) |
 | `enhance` | **Enhance** | An Active Sound Design emulation: it does not play a foreign engine but adds rpm-locked low engine orders (mostly 30–150 Hz) under the car's own diesel, from the **real** rpm. Its presets are diesel characters: **Inline 6 Diesel** (i6, B57 style), **V8 TDI** (v8), **V6 TDI** (v10), **V6 TDI Sport** (v12). [synth/enhance](synth/enhance/README.md) |
 
-Each is a folder `synth/<id>/` with its own C source, tests and sample renders (`samples/*.wav`, 40 s demo drives),
-built into `tool/lfb-enginesound/es-synth-<id>`. All share one command line and control protocol
+Each is a folder `synth/<id>/` with its own C source and tests, built into `tool/lfb-enginesound/es-synth-<id>`.
+[samples/](samples/) has the five sounds as recordings (40 s demo drives; the two Enhance ones are only the added
+bass, so use headphones or real speakers). All share one command line and control protocol
 ([synth/PROTOCOL.md](synth/PROTOCOL.md)).
 
 ## The page
@@ -109,7 +110,7 @@ The last stage of every sound engine (`synth/common/protect.h`). In the car it f
 the loudness of radio and music, so the volume knob can stay where the radio is comfortable (and the radio isn't
 deafening when the engine sound stops). Then: no DC or infrasound (30 Hz high-pass), nothing above 16 kHz, the bass
 below ~150 Hz held under -3 dBFS, the long-term power held under -8 dBFS RMS (loud mastered music), peaks under
--1 dBFS, and a fade-in at start. `tools/add_protect.py` puts it into a new engine; `make -C synth test` tests it.
+-1 dBFS, and a fade-in at start. `make -C synth test` tests it.
 
 ## Settings
 
@@ -133,18 +134,20 @@ below ~150 Hz held under -3 dBFS, the long-term power held under -8 dBFS RMS (lo
 |---|---|
 | `apps/lfb_enginesound/` | the app: `main.js` (pages, background), `core.js` (mapping, on/off, sound engines), `route.js` (AudioManager routes), `daemon.js` (service socket client), `app.json` |
 | `tool/lfb-enginesound/` | the service: `esd.js`, the prebuilt `es-synth-<id>` (x86-64, glibc ≤ 2.27, loader `/lib/ld-linux-x86-64.so.2`), `check.js` (the Store's health check), its systemd unit and `component.json` |
-| `synth/<id>/` | each sound engine: C source, Makefile, tests, sample renders |
-| `synth/common/` | the shared speaker protection and its test |
+| `synth/<id>/` | each sound engine: C source, tests |
+| `synth/common/` | shared by the engines: the speaker protection and its test, the ALSA output, the build (`engine.mk`) |
+| `samples/` | the five sounds as recordings (`make -C synth samples`) |
 | `synth/PROTOCOL.md` | the shared command line and control lines |
-| `tools/` | `import_engine.sh` (a sound engine from a branch into `synth/<id>/`), `add_protect.py`, `check_glibc.py`, `make_es_icon.js` (the app icon) |
-| `test/core.test.js` | the app's logic and routes, with a fake service and AudioManager |
+| `tools/` | `check_glibc.py` (a car binary's glibc versions and loader), `make_es_icon.js` (the app icon) |
+| `test/` | `core.test.js` (the app's logic and routes, with a fake service and AudioManager), `track.test.js` (the rpm estimate), `service.test.js` (the service with a fake synth, driven by the app's client) |
 | `kit/` | the MGU app kit from [idrive7-apps](https://github.com/cauliflowermossgrape/idrive7-apps) (MIT): runtime, `tools/build.py`, previews |
 | `mgu-repo.json` | the Store's repo-tree manifest: the head unit builds the app from source (`kit/tools/build.py`), the service's files are prebuilt |
 
 ## Development
 
 ```sh
-node test/core.test.js                       # the app's logic and audio routes
+node test/core.test.js && node test/track.test.js   # the app's logic, audio routes and rpm estimate
+node test/service.test.js                    # the service: control lines reach the synth, kept ones are replayed
 make -C synth test                           # every sound engine (renders, checks, bench) and the protection
 make -C synth car                            # the head unit's binaries (zig 0.17), checked by tools/check_glibc.py
 synth/simulate/build/es-synth-host --out wav:v8.wav --demo 40 --preset v8   # listen to a demo drive
@@ -157,8 +160,10 @@ The service runs locally too: `ES_RUN_DIR=<dir> ES_SYNTH_DIR=<dir with es-synth-
 tool/lfb-enginesound/esd.js`, and the app's `ES_CTL_SOCK` points at its socket. An installable package needs BMW's
 `oap-sdk` from your own head unit (`kit/tools/extract_sdk.js`; never commit it).
 
-A new sound engine: `tools/import_engine.sh <id> <git ref>` (same command line and control lines), then its binary
-in `component.json` `files`, its entry in `SOUND_ENGINES` (`core.js`) and in the `soundEngine` setting (`app.json`).
+A new sound engine: a folder `synth/<id>/` with the shared command line and control lines
+([synth/PROTOCOL.md](synth/PROTOCOL.md)), `protect.h` as its last stage and a Makefile that includes
+`common/engine.mk`; then its binary in `component.json` `files`, its entry in `SOUND_ENGINES` (`core.js`) and in the
+`soundEngine` setting (`app.json`).
 
 ## Credits
 
