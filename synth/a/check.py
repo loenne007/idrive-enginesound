@@ -110,35 +110,81 @@ for p in ('v8','v10'):
  assert vals[1]>vals[0]*1.1,(p,'overrun transients missing',vals)
  assert level(a[121000:156000])<level(a[48000:110000]),(p,'overrun louder than load')
  print(f'{p}: crest factor load {vals[0]:.2f} -> after lift-off {vals[1]:.2f}')
-# Gear shifts: level continuity across S events. The same drive is rendered with and without the S lines (the
-# renders are deterministic), so rpm-dependent pipe/muffler colour cancels and only what the shift itself does
-# remains: within -0.1..+0.8 s of the event the 10 ms RMS envelope (averaged over 55 ms, 85 ms for the step) may not move more than
-# 3 dB (no cut/gap, no restart onset, no bark or crackle triggered by the shift). Cases: an upshift with the rpm
-# ramping down over 350 ms like the car's telemetry, the same upshift arriving as an instantaneous rpm STEP
-# (compared with the smooth ramp: the synth slew-limits rpm), and an overrun downshift with a rev rise.
-def drive(kind,shift,step=''):
+# Gear shifts: level continuity across S events.
+# (1) The same drive is rendered with and without the S lines (renders are deterministic), so rpm-dependent
+#     pipe/muffler colour cancels and only what the shift itself does remains: within -0.1..+0.8 s of the event the
+#     10 ms RMS envelope (energy-averaged over 55 ms) may not move more than 3 dB (no cut/gap, no restart onset, no
+#     bark or crackle triggered by the shift). Upshift with the rpm ramping down over 250 ms like the car's
+#     telemetry, and an overrun downshift with a rev rise.
+# (2) An upshift whose rpm arrives as an instantaneous STEP (the synth turns it into a ~20 ms rounded ramp): the
+#     85 ms envelope stays within 3 dB of the settled levels before/after (no gap below, no onset above).
+def drive(kind,shift,step=False):
  lines=[]
  for i in range(81):
   t=i/20
   if kind=='up':
-   k=min(1,max(0,(t-2)/.35));k=k*k*(3-2*k);r=6000+(2800-6000)*k;l,th,g0,g1=.9,.94,3,4
-   if step=='step':r=6000 if t<2 else 2800
-   if step=='lin':r=6000 if t<2 else max(2800,6000-8000*(t-1.95)) # P lines are 50 ms apart
+   k=min(1,max(0,(t-2)/.25));k=k*k*(3-2*k);r=6000+(2800-6000)*k;l,th,g0,g1=.9,.94,3,4
+   if step:r=6000 if t<2 else 2800
   else:
-   k=min(1,max(0,(t-2)/.3));k=k*k*(3-2*k);r=3000+1000*k;l,th,g0,g1=-.8,0,4,3
+   k=min(1,max(0,(t-2)/.2));k=k*k*(3-2*k);r=3000+1000*k;l,th,g0,g1=-.8,0,4,3
   lines.append(f'{t} P {r:.1f} {l} {th} {g1 if t>=2 else g0} 60')
   if shift and i==40:lines.append(f'{t} S {g0} {g1}')
  return lines
-worst=0
+def med(x):x=sorted(x);return x[len(x)//2]
+worst=0;worst_step=0
 for p in ('i6','v8','v10','v12'):
- for kind,step in (('up',False),('up',True),('down',False)):
-  half=8 if step else 5 # identical rpm trajectories: 55 ms; step vs. ramp (a few ms apart): 85 ms
-  a=envelope(render(p,f'shift-{kind}{int(step)}',drive(kind,True,'step' if step else '')),half)
-  # reference: the same drive without the S event; for the rpm step, the same shift on the 8000 rpm/s ramp the
-  # synth should make of the step
-  b=envelope(render(p,f'shift-{kind}{int(step)}-ref',drive(kind,step,'lin' if step else '')),half)
+ for kind in ('up','down'):
+  a=envelope(render(p,f'shift-{kind}',drive(kind,True)),5)
+  b=envelope(render(p,f'shift-{kind}-ref',drive(kind,False)),5)
   w=[abs(a[k]-b[k]) for k in range(int(1.9*200),int(2.8*200))]
   worst=max(worst,max(w))
-  assert max(w)<=3,(p,kind,'step' if step else 'ramp','shift level discontinuity dB',max(w))
-print(f'shifts: max envelope deviation caused by S events / rpm steps {worst:.1f} dB (limit 3)')
-print('PASS: levels, pitch, brightness, transients, shifts, transitions, mute, stale input and quit')
+  assert max(w)<=3,(p,kind,'shift level discontinuity dB',max(w))
+ e=envelope(render(p,'shift-step',drive('up',True,True)),8)
+ pre=med(e[int(1.65*200):int(1.95*200)]);post=med(e[int(2.6*200):int(2.9*200)]);w=e[int(1.95*200):int(2.6*200)]
+ d=max(min(pre,post)-min(w),max(w)-max(pre,post));worst_step=max(worst_step,d)
+ assert d<=3,(p,'rpm step: gap/onset dB',d)
+print(f'shifts: max envelope deviation caused by S events {worst:.1f} dB, by an rpm step {worst_step:.1f} dB (limit 3)')
+# X sound settings (each 0..2, 1 = default): each changes what it should, 0 removes turbo/bov/pops, no clicks.
+def db(x):return 10*math.log10(x+1e-20)
+def band(a,lo,hi,t0,t1):
+ n=16384;e=0;c=0
+ for s0 in range(int(t0*48000),int(t1*48000)-n,n):
+  s=fft([v*(.5-.5*math.cos(2*math.pi*i/(n-1))) for i,v in enumerate(a[s0:s0+n])]);e+=sum(s[int(lo*n/48000):int(hi*n/48000)]);c+=1
+ return e/max(c,1)
+def xrender(p,name,setting,value,lines):return render(p,f'x-{name}-{setting}{value}',[f'0 X {setting} {value}']+lines)
+steady=lambda r,l,th,dur=4:[f'{t/20} P {r} {l} {th} 3 60' for t in range(int(dur*20)+1)]
+lift=[f'{t/20} P {5200 if t<50 else 5200-500*(t/20-2.5)} {.95 if t<50 else -.6} {.95 if t<50 else 0} 3 70' for t in range(101)]
+lifts=[]
+for t in range(251):
+ T=t/20;up=(T%3.5)<2  # 2 s pulling, 1.5 s overrun, three times
+ lifts.append(f'{T} P {5200 if up else 5200-600*(T%3.5-2)} {.95 if up else -.6} {.95 if up else 0} 3 70')
+res={}
+for v in (0,1,2):
+ # offgas: idle and coast level scale, full load stays
+ res['idle',v]=level(xrender('v8','idle','offgas',v,steady(650,.05,.03))[48000:])
+ res['full',v]=level(xrender('v8','full','offgas',v,steady(5000,.95,.95))[48000:])
+ # turbo: whistle/air band (3-8 kHz) under boost on the turbo i6
+ res['turbo',v]=band(xrender('i6','boost','turbo',v,steady(5500,.95,.95)),3000,8000,1.5,3.5)
+ # bov: 1-4 kHz right after a lift from boost (window 0.05-0.45 s after the lift)
+ res['bov',v]=band(xrender('i6','lift','bov',v,lift),1000,4000,2.55,2.95)
+ # pops: loudest 10 ms in the overrun after three lift-offs on the V8 (from 0.1 s after each lift)
+ a=xrender('v8','lifts','pops',v,lifts)
+ res['pops',v]=max(level(a[i:i+480]) for L in (2,5.5,9) for i in range(int((L+.1)*48000),int((L+1.4)*48000),240))
+ # bass: energy under 120 Hz against 300-3000 Hz
+ a=xrender('v12','bass','bass',v,steady(3000,.5,.5));res['bass',v]=db(band(a,30,120,1,3.5))-db(band(a,300,3000,1,3.5))
+assert res['idle',0]<res['idle',1]*.2 and res['idle',2]>res['idle',1]*1.6,('offgas idle',[res['idle',v] for v in (0,1,2)])
+assert abs(db(res['full',2]**2)-db(res['full',0]**2))<1.5,('offgas must not change full load',[res['full',v] for v in (0,1,2)])
+assert res['turbo',0]<res['turbo',1]*.8<res['turbo',2]*.8*.7,('turbo',[res['turbo',v] for v in (0,1,2)])
+assert res['bov',0]<res['bov',1]*.7 and res['bov',1]<res['bov',2]*.7,('bov',[res['bov',v] for v in (0,1,2)])
+assert db(res['pops',1]**2)>db(res['pops',0]**2)+3 and db(res['pops',2]**2)>db(res['pops',1]**2)+2,('pops',[res['pops',v] for v in (0,1,2)])
+assert res['bass',0]<res['bass',1]-4<res['bass',2]-8,('bass',[res['bass',v] for v in (0,1,2)])
+print('X: idle offgas 0/1/2 %.1f/%.1f/%.1f dBFS, full load %.1f/%.1f dBFS; turbo band %+.1f/%+.1f dB; bov %+.1f/%+.1f dB; pops peak %.1f/%.1f/%.1f dBFS; bass %+.1f/%+.1f dB'%(
+ db(res['idle',0]**2),db(res['idle',1]**2),db(res['idle',2]**2),db(res['full',0]**2),db(res['full',2]**2),
+ db(res['turbo',0])-db(res['turbo',1]),db(res['turbo',2])-db(res['turbo',1]),db(res['bov',0])-db(res['bov',1]),db(res['bov',2])-db(res['bov',1]),
+ db(res['pops',0]**2),db(res['pops',1]**2),db(res['pops',2]**2),res['bass',0]-res['bass',1],res['bass',2]-res['bass',1]))
+# changing every setting between its extremes while driving: smoothed, no clicks
+lines=[f'{t/20} P {1500+3500*abs(math.sin(t/40))} {.8 if (t//30)%2 else -.4} {.8 if (t//30)%2 else 0} 3 60' for t in range(161)]
+names=('offgas','turbo','bov','pops','bass')
+for i in range(40):lines.append(f'{i*.2} X {names[i%5]} {(0,2,1)[(i//5)%3]}')
+lines.sort(key=lambda x:float(x.split()[0]));clicks(render('i6','x-changes',lines))
+print('PASS: levels, pitch, brightness, transients, shifts, X settings, transitions, mute, stale input and quit')

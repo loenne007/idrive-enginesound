@@ -38,6 +38,9 @@ void synth_init(Synth *s, int p, float vol) {
     s->last_p = -1e9;
     s->rpm_v = s->rpm;
     s->shift_t = -1;
+    for (i = 0; i < NX; i++) s->xt[i] = s->xv[i] = 1;
+    s->bass_set = 1;
+    bq_lowshelf(&s->bass, 150, 0);
     s->voice[p].weight = 1;
     /* tone stage */
     for (i = 0; i < 2; i++) wa_highpass(&s->infra[i], 36, -3.0103f);
@@ -127,6 +130,17 @@ int synth_control(Synth *s, const char *line) {
             s->blip = 1;
         return 1;
     }
+    {
+        /* X <name> <value>: sound settings, multipliers 0..2 (1 = default), smoothed in synth_render, kept across E */
+        static const char *names[NX] = {"offgas", "turbo", "bov", "pops", "bass"};
+        char key[16];
+        if (sscanf(line, "X %15s %f %c", key, &v, &extra) == 2 && isfinite(v) && v >= 0 && v <= 2)
+            for (k = 0; k < NX; k++)
+                if (!strcmp(key, names[k])) {
+                    s->xt[k] = v;
+                    return 1;
+                }
+    }
     if (line[0] == 'Q' && sscanf(line + 1, " %c", &extra) != 1) {
         s->quit = 1;
         return 1;
@@ -153,6 +167,7 @@ static float master(Synth *s, float x) {
     int i;
     x *= .95f;
     x = bq(&s->infra[1], bq(&s->infra[0], x));
+    x = bq(&s->bass, x); /* X bass: low shelf at 150 Hz, +-9 dB at 0 / 2 */
     /* bass enhancer: missing-fundamental harmonics of the low end for small speakers */
     b = bq(&s->bass_lp[1], bq(&s->bass_lp[0], x));
     b = tanh_f(2.2f * b);
@@ -191,24 +206,34 @@ void synth_render(Synth *s, int16_t *out, unsigned frames) {
     for (f = 0; f < frames; f++) {
         float x = 0, load, gate = (!s->mute && !s->quit && s->time - s->last_p <= 1.5) ? 1 : 0;
         /* audio-rate parameter smoothing (~20 ms rpm, ~30 ms load) */
-        /* rpm: slew-limited to 8000 rpm/s (a telemetry step never sounds like a cut or a restart), then a
-         * ~20 ms one-pole rounds the corners of the ramp */
-        s->rpm_v += clampf(s->trpm - s->rpm_v, -8000.f / SR, 8000.f / SR);
-        s->rpm += (s->rpm_v - s->rpm) * .00104f;
-        s->load += (s->tload - s->load) * .00069f;
-        s->throttle += (s->tthrottle - s->throttle) * .00069f;
+        /* rpm/load/throttle: two cascaded one-poles (5 ms each for rpm: a step reaches 90 % in ~20 ms, as a quick
+         * rounded ramp rather than a click; 6 ms each for load/throttle: ~23 ms). The sound follows the car. */
+        s->rpm_v += (s->trpm - s->rpm_v) * (1.f / (.005f * SR));
+        s->rpm += (s->rpm_v - s->rpm) * (1.f / (.005f * SR));
+        s->load_v += (s->tload - s->load_v) * (1.f / (.006f * SR));
+        s->load += (s->load_v - s->load) * (1.f / (.006f * SR));
+        s->thr_v += (s->tthrottle - s->thr_v) * (1.f / (.006f * SR));
+        s->throttle += (s->thr_v - s->throttle) * (1.f / (.006f * SR));
+        /* X settings: ~60 ms smoothing at the control rate, bass shelf redesigned only while it moves */
+        if (!(s->tick % CTRL)) {
+            for (i = 0; i < NX; i++) s->xv[i] += (s->xt[i] - s->xv[i]) * .1f;
+            if (fabsf(s->xv[X_BASS] - s->bass_set) > 1e-4f) {
+                s->bass_set = s->xv[X_BASS];
+                bq_lowshelf(&s->bass, 150, 9 * (s->bass_set - 1));
+            }
+        }
         s->speed += (s->tspeed - s->speed) * .0004f;
         s->volume += (s->tvolume - s->volume) * .00021f;
         s->gate += (gate - s->gate) * .0002083f;
-        /* upshift torque reduction: a smooth bump u^2(1-u)^3 over 320 ms (C1 at both ends, peak at 128 ms, ahead
-         * of the rpm drop like a transmission's torque intervention), load -15 % at its peak; combustion never
-         * stops and nothing restarts */
+        /* upshift torque reduction: a smooth bump u^2(1-u)^3 over 180 ms, starting on S (C1 at both ends, peak
+         * at 72 ms, a crisp transmission torque intervention), load -20 % at its peak; combustion never stops
+         * and nothing restarts */
         load = s->load;
         if (s->shift_t >= 0) {
-            float u = s->shift_t / .32f, e = u * u * (1 - u) * (1 - u) * (1 - u) * 28.935f;
-            if (load > 0) load *= 1 - .15f * e;
+            float u = s->shift_t / .18f, e = u * u * (1 - u) * (1 - u) * (1 - u) * 28.935f;
+            if (load > 0) load *= 1 - .2f * e;
             s->shift_t += 1.f / SR;
-            if (s->shift_t >= .32f) s->shift_t = -1;
+            if (s->shift_t >= .18f) s->shift_t = -1;
         }
         /* downshift blip: ~30 ms rise, ~120 ms decay, +0.2 load at most */
         s->blip = clean(s->blip * (1 - 1.f / (.12f * SR)));
@@ -218,7 +243,7 @@ void synth_render(Synth *s, int16_t *out, unsigned frames) {
             Voice *v = &s->voice[i];
             v->weight += ((i == s->selected ? 1 : 0) - v->weight) * .0002083f;
             if (v->weight > 1e-5f)
-                x += v->weight * voice_step(v, &presets[i], s->rpm, load, s->throttle, s->turbo) * presets[i].gain;
+                x += v->weight * voice_step(v, &presets[i], s->rpm, load, s->throttle, s->turbo, s->xv) * presets[i].gain;
         }
         x = master(s, x);
         /* compressor detectors per sample, gains at control rate */
@@ -245,8 +270,8 @@ void demo_control(Synth *s, double t, double duration) {
         l = z < .45 ? .6f : -.5f;
     } else if (u >= 9 && u < 25) {
         /* pulls through gears 1-5, 0.38 -> 0.85 of redline per gear. Like the car's telemetry, the rpm falls to
-         * the next gear over ~350 ms (smoothstep), it does not jump. */
-        double z = (u - 9) / 3.2, f = z - floor(z), sh = .35 / 3.2;
+         * the next gear over ~250 ms (smoothstep), it does not jump. */
+        double z = (u - 9) / 3.2, f = z - floor(z), sh = .25 / 3.2;
         g = 1 + (int)z;
         r = p->redline * (.38f + .47f * (float)f);
         if (g > 1 && f < sh) {
@@ -257,13 +282,13 @@ void demo_control(Synth *s, double t, double duration) {
         l = .9f;
         th = .94f;
     } else if (u >= 25 && u < 31) {
-        /* coasting down 5-4-3-2: road speed falls, each downshift raises the revs smoothly over ~300 ms */
+        /* coasting down 5-4-3-2: road speed falls, each downshift raises the revs smoothly over ~200 ms */
         static const float ratio[4] = {1, 1.25f, 1.6f, 2.1f};
         double z = (u - 25) / 1.5, f = z - floor(z);
         int k = (int)z;
         float speed = 1 - .12f * (float)(u - 25), from = ratio[k > 0 ? k - 1 : 0], to = ratio[k];
-        if (f < .2 && k > 0) {
-            float w = (float)(f / .2);
+        if (f < .14 && k > 0) {
+            float w = (float)(f / .14);
             to = from + (to - from) * w * w * (3 - 2 * w);
         }
         g = 5 - k;

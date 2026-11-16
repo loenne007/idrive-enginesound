@@ -10,6 +10,9 @@
 #define DLEN 1024    /* delay-line size (power of two): 21 ms, longer than any pipe round trip here */
 #define CTRL 32      /* control-rate period, samples (filter coefficients, envelopes) */
 
+/* X sound settings: multipliers 0..2, 1 = the engine's default (see README) */
+enum { X_OFFGAS, X_TURBO, X_BOV, X_POPS, X_BASS, NX };
+
 /* ---------------------------------------------------------------------------------------------------------------
  * Preset: the machine. Field meanings follow YigitSalihEmecen/Engine_Sim's profiles.js (MIT), whose numbers most
  * presets start from; the firing geometry is BMW's.
@@ -90,8 +93,8 @@ typedef struct {
     float sub_ph, sub_order, sub_lvl;
     Biquad sub_lp;
     /* turbo */
-    float spool, climb, whine_ph, shaft_ph, surge, surge_ph, prev_thr, air_lp, hiss_g;
-    Biquad tb_noise, tb_hiss, tb_surge, tb_lp, tb_shelf, turbine;
+    float spool, climb, whine_ph, shaft_ph, surge, surge_ph, prev_thr, air_lp, hiss_g, bov_env;
+    Biquad tb_noise, tb_hiss, tb_surge, tb_lp, tb_shelf, turbine, tb_bov;
     float tb_whine_hz, tb_aero, whoosh_g;
     Biquad tb_whoosh;
     /* overrun crackle */
@@ -107,11 +110,12 @@ typedef struct {
     Voice voice[NP];
     int selected, turbo, mute, quit, gear;
     float rpm, load, throttle, speed, trpm, tload, tthrottle, tspeed, volume, tvolume, gate;
-    float rpm_v;     /* rate-limited rpm (before the corner-rounding one-pole) */
+    float rpm_v, load_v, thr_v; /* first stages of the two-pole rpm/load/throttle smoothers */
     float shift_t;   /* time since an upshift started, s (< 0: none): smooth torque-reduction bump */
     float blip, blip_env; /* downshift: small rev-match blip (target, smoothed envelope) */
     /* master chain (Engine_Sim's tone stage, cabin, room, 3-band dynamics) */
-    Biquad infra[2], rumble, bump, presence, aircut, boom, panel, cab_lp, shelf;
+    Biquad infra[2], rumble, bump, presence, aircut, boom, panel, cab_lp, shelf, bass;
+    float xt[NX], xv[NX], bass_set; /* X settings: target, smoothed; bass shelf coefficient state */
     Biquad bass_lp[2], bass_hp, bass_lp3;
     Biquad rv_hp, rv_lp;
     float rv_buf[4][4096];
@@ -128,5 +132,5 @@ void synth_render(Synth *s, int16_t *out, unsigned frames);
 void demo_control(Synth *s, double t, double duration);
 /* engine.c */
 void voice_init(Voice *v, const Preset *p, int index);
-float voice_step(Voice *v, const Preset *p, float rpm, float load, float throttle, int turbo);
+float voice_step(Voice *v, const Preset *p, float rpm, float load, float throttle, int turbo, const float *xs);
 #endif

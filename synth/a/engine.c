@@ -23,6 +23,15 @@
 
 #define C_AIR 343.f
 #define KNEE_HALF_ORDERS 48.f /* radiation knee: 24 engine orders */
+#ifndef OFFGAS_LIFT
+#define OFFGAS_LIFT 1.6f /* default off-throttle level lift (+4 dB, x X offgas) */
+#endif
+#ifndef LEV_L0
+#define LEV_L0 .5f /* voice level at zero load, relative to full load */
+#endif
+#ifndef LEV_OVR
+#define LEV_OVR .6f /* the overrun counts as this much load for the level (still pumping) */
+#endif
 
 /* ---- shared tables ---- */
 #define ONSET_N 64
@@ -187,6 +196,7 @@ void voice_init(Voice *v, const Preset *p, int index) {
     v->packing_base = clampf(C_AIR * p->gas / (4 * maxc) * 7, 500, 11000);
     wa_highpass(&v->nl_dc, 22, .7f);
     wa_lowpass(&v->tb_lp, 4600, 0);
+    bq_bandpass(&v->tb_bov, 2000, .9f);
     bq_highshelf(&v->tb_shelf, 2600, -5.5f);
     v->scale = 1;
     v->nl_mk = 1;
@@ -204,7 +214,8 @@ void voice_init(Voice *v, const Preset *p, int index) {
 /* ---------------------------------------------------------------------------------------------------------------
  * Control rate: every CTRL samples, everything that needs a coefficient or a libm call.
  * ------------------------------------------------------------------------------------------------------------- */
-static void voice_control(Voice *v, const Preset *p, float rpm, float load, float throttle, int turbo) {
+static void voice_control(Voice *v, const Preset *p, float rpm, float load, float throttle, int turbo,
+                          const float *xs) {
     const float dt = (float)CTRL / SR, rpm_n = clampf(rpm / p->redline, 0, 1), pl = clampf(load, 0, 1);
     const float f0 = rpm / 120, nb = (float)nbanks(p);
     float x, overrun, heat, scale, flow, coast, excite, turb;
@@ -219,25 +230,27 @@ static void voice_control(Voice *v, const Preset *p, float rpm, float load, floa
     v->load = pl;
     /* overrun: closed throttle above idle; fuel cut follows it (restored near idle) */
     overrun = (load < -.05f && rpm > p->idle + 250) ? 1.f : 0.f;
-    v->overrun += (overrun - v->overrun) * (1 - expf(-dt / .08f));
+    v->overrun += (overrun - v->overrun) * (1 - expf(-dt / .04f));
     {
         float want = (load > -.06f || rpm < 1150) ? 1.f : (rpm > 1350 ? 0.f : (v->fuel > .5f));
         v->fuel += (want - v->fuel) * (1 - expf(-dt / (want > v->fuel ? .025f : .07f)));
     }
     x = clampf(pl + .3f * v->bark, 0, 1);
     v->x_load = x;
-    v->amp = (1 + .35f * v->bark) * (.32f + .68f * powf(x, .7f)) * (.45f + .55f * rpm_n) * (1 - .45f * v->overrun) *
+    v->amp = (1 + .35f * v->bark) * (.32f + .68f * powf(x, .7f)) * (.45f + .55f * rpm_n) * (1 - .3f * v->overrun) *
              p->voice;
     v->rpm_n = rpm_n;
     v->f0 = f0;
     /* radiation knee: one-pole lowpass at 24 engine orders */
     v->lpk = 1 - expf(-2 * PI_F * fminf(KNEE_HALF_ORDERS * f0, .45f * SR) / SR);
-    /* Cabin loudness: Engine_Sim normalises every source to a fixed RMS and its dynamics squeeze the rest, which
-     * leaves idle only ~6 dB under a full-load pull. In a car the range is closer to 15 dB, so the whole voice
-     * follows load and rpm (the overrun keeps some level: the engine is still pumping). */
+    /* Cabin loudness: the whole voice follows load and rpm, so that off the throttle (idle, coasting, light load)
+     * the engine sits ~8 dB under a full-load pull (the overrun keeps some level: the engine is still pumping).
+     * X offgas scales the off-throttle level (0..2, linear), fading out as the load reaches ~0.6. */
     {
-        float xs = fmaxf(x, .3f * v->overrun);
-        v->level = (.32f + .68f * powf(xs, .7f)) * (.55f + .45f * rpm_n);
+        float xl = fmaxf(x, LEV_OVR * v->overrun), w = clampf((x - .05f) / .55f, 0, 1);
+        w = w * w * (3 - 2 * w);
+        v->level = (LEV_L0 + (1 - LEV_L0) * powf(xl, .7f)) * (.66f + .34f * rpm_n);
+        v->level *= OFFGAS_LIFT * xs[X_OFFGAS] + (1 - OFFGAS_LIFT * xs[X_OFFGAS]) * w;
     }
 
     /* refresh the live pulses' per-sample decay multipliers */
@@ -315,9 +328,12 @@ static void voice_control(Voice *v, const Preset *p, float rpm, float load, floa
         v->whoosh_g = .16f * (v->tb_aero * fl + .6f * v->climb * sqrtf(v->spool));
         bq_bandpass(&v->tb_whoosh, 2500 + 3000 * v->spool, .6f);
         /* surge flutter on a fast closure against a spinning compressor ("stu-stu"), short-lived */
-        if (throttle < v->prev_thr - .2f * dt / .05f && throttle < .25f && v->spool > .12f) /* a real closure */
+        if (throttle < v->prev_thr - .2f * dt / .05f && throttle < .25f && v->spool > .12f) { /* a real closure */
             v->surge = fmaxf(v->surge, clampf(v->spool * 1.4f, 0, 1));
+            v->bov_env = fmaxf(v->bov_env, clampf(v->spool * 1.2f, 0, 1));
+        }
         v->surge *= expf(-dt / .26f);
+        v->bov_env *= expf(-dt / .16f);
         bq_bandpass(&v->tb_surge, 1300 + 900 * v->surge, 3);
         v->prev_thr = throttle;
         turb = turbo ? .55f + .45f * v->spool : 0;
@@ -328,14 +344,14 @@ static void voice_control(Voice *v, const Preset *p, float rpm, float load, floa
 /* ---------------------------------------------------------------------------------------------------------------
  * Per sample
  * ------------------------------------------------------------------------------------------------------------- */
-float voice_step(Voice *v, const Preset *p, float rpm, float load, float throttle, int turbo) {
+float voice_step(Voice *v, const Preset *p, float rpm, float load, float throttle, int turbo, const float *xs) {
     const int nb = nbanks(p);
     const float hardness = clampf(p->hardness, 0, 1.5f) / .65f;
     float src[3] = {0, 0, 0}, acc[3] = {0, 0, 0}, ex, in, sub, tb = 0, direct = 0, xn, crack = 0, scale;
     double dph, dphv;
     int i, o;
 
-    if (!(v->tick % CTRL)) voice_control(v, p, rpm, load, throttle, turbo);
+    if (!(v->tick % CTRL)) voice_control(v, p, rpm, load, throttle, turbo, xs);
     v->tick++;
     scale = v->scale;
 
@@ -426,8 +442,12 @@ float voice_step(Voice *v, const Preset *p, float rpm, float load, float throttl
         xn = bq(&v->xn_body, bq(&v->xn_peak, bq(&v->xn_hp, rnd(&v->seed)))) * am;
     }
 
-    /* ---- overrun crackle: unburnt fuel lighting in the hot pipe right after a lift-off ---- */
-    if (p->crackle > 0) {
+    /* ---- overrun crackle: unburnt fuel lighting in the hot pipe right after a lift-off ----
+     * X pops: 0 none, 1 the preset's (subtle), 2 a loud sport exhaust: rate x pops^2 plus a floor so every engine
+     * pops, louder events, a longer window and lower rpm/heat thresholds */
+    {
+        const float pops = xs[X_POPS], hot = clampf(pops - 1, 0, 1);
+        const float rate = (p->crackle * pops * pops + .5f * hot) * (2 + 5 * v->resid);
         if (v->fuel > .5f)
             v->resid += (v->x_load * (.4f + .6f * v->rpm_n) - v->resid) * (1.f / (1.5f * SR));
         else
@@ -437,15 +457,15 @@ float voice_step(Voice *v, const Preset *p, float rpm, float load, float throttl
         v->load_avg += (fmaxf(load, 0) - v->load_avg) * (1.f / (.5f * SR));
         if (load > .1f) v->crack_armed = 1;
         if (load < -.05f && v->crack_armed) {
-            if (v->load_avg >= .25f && rpm > 1800 && v->resid > .12f)
-                v->crack_t = .2f + .5f * (.5f + .5f * rnd(&v->seed)); /* burst window 0.2..0.7 s */
+            if (v->load_avg >= .25f - .1f * hot && rpm > 1800 - 500 * hot && v->resid > .12f - .06f * hot)
+                v->crack_t = (.2f + .5f * (.5f + .5f * rnd(&v->seed))) * (1 + hot); /* window 0.2..0.7 s (x2) */
             v->crack_armed = 0;
         }
         if (v->crack_t > 0) {
             v->crack_t -= 1.f / SR;
-            if (.5f + .5f * rnd(&v->seed) < p->crackle * (2 + 5 * v->resid) / SR) { /* Poisson, ~2-6 per second */
+            if (.5f + .5f * rnd(&v->seed) < rate / SR) { /* Poisson, ~2-6 per second at pops 1 */
                 float size = .5f + .5f * rnd(&v->seed);
-                v->crack_env += (.3f + 1.2f * size * size) * (.4f + v->resid);
+                v->crack_env += (.3f + 1.2f * size * size) * (.4f + v->resid) * fminf(pops, 1) * (1 + .8f * hot);
                 v->crack_dec = 1 - 1.f / ((.012f + .03f * (.5f + .5f * rnd(&v->seed))) * SR);
             }
         }
@@ -512,7 +532,7 @@ float voice_step(Voice *v, const Preset *p, float rpm, float load, float throttl
     }
 
     /* ---- turbo: whine (soft-saturated blade tone with shaft-rate AM), blade-rate noise, rush, flutter ---- */
-    if (v->spool > .02f || v->surge > .01f) {
+    if (v->spool > .02f || v->surge > .01f || v->bov_env > 1e-3f) {
         float wn = rnd(&v->seed), s, shaft, fl;
         int k;
         v->whine_ph += v->tb_whine_hz / SR;
@@ -530,19 +550,25 @@ float voice_step(Voice *v, const Preset *p, float rpm, float load, float throttl
         tb += v->hiss_g * bq(&v->tb_hiss, wn);
         /* compressor/intake air: broadband whoosh, more while the shaft is climbing */
         tb += v->whoosh_g * bq(&v->tb_whoosh, rnd(&v->seed));
-        /* flutter: a burst train at ~13 Hz through the "tu" band */
-        if (v->surge > .01f) {
-            float burst;
-            v->surge_ph += 13 * (.7f + .45f * v->surge) / SR;
-            if (v->surge_ph >= 1) v->surge_ph -= 1;
-            burst = v->surge_ph < .35f ? sub_tab[(int)(v->surge_ph / .35f * SUB_N / 2)] : 0;
-            tb += .5f * v->surge * burst * bq(&v->tb_surge, wn);
+        tb *= xs[X_TURBO]; /* X turbo: whistle and spool air */
+        /* lift after boost (X bov): recirculation whoosh (1-3 kHz noise, ~160 ms) and a short surge flutter, a
+         * ~13 Hz burst train through the "tu" band */
+        {
+            float bv = v->bov_env * bq(&v->tb_bov, rnd(&v->seed)) * .22f;
+            if (v->surge > .01f) {
+                float burst;
+                v->surge_ph += 13 * (.7f + .45f * v->surge) / SR;
+                if (v->surge_ph >= 1) v->surge_ph -= 1;
+                burst = v->surge_ph < .35f ? sub_tab[(int)(v->surge_ph / .35f * SUB_N / 2)] : 0;
+                bv += .5f * v->surge * burst * bq(&v->tb_surge, wn);
+            }
+            tb += bv * xs[X_BOV];
         }
     }
 
     /* turbo tone stage: it is the one voice living in the 2-6 kHz band */
     tb = bq(&v->tb_shelf, bq(&v->tb_lp, tb));
     /* the voice's bus mix (presets.js DEFAULT_SOUND.mix) */
-    direct = .75f * crack;
+    direct = .75f * crack * (1 + .6f * clampf(xs[X_POPS] - 1, 0, 1)); /* a sport exhaust: more dry bang */
     return (ex * 1.0f + in * .75f + tb * .40f + direct * .42f + sub * .25f) * v->level;
 }

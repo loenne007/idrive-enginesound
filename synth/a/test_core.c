@@ -19,6 +19,15 @@ int main(void) {
         synth_init(&s, p, 1);
         assert(!synth_control(&s, "P nan 0 0 1 0"));
         assert(!synth_control(&s, "V nan"));
+        /* X settings: known names, 0..2, finite; anything else ignored */
+        assert(synth_control(&s, "X offgas 1.5") && s.xt[X_OFFGAS] == 1.5f);
+        assert(synth_control(&s, "X turbo 0") && synth_control(&s, "X bov 2") && synth_control(&s, "X pops 0.5"));
+        assert(synth_control(&s, "X bass 2") && s.xt[X_BASS] == 2);
+        assert(!synth_control(&s, "X bass 2.5") && !synth_control(&s, "X bass -1") && !synth_control(&s, "X bass nan"));
+        assert(!synth_control(&s, "X volume 1") && !synth_control(&s, "X pops") && !synth_control(&s, "X pops 1 x"));
+        assert(synth_control(&s, "E v12") && s.xt[X_BASS] == 2); /* kept across E */
+        snprintf(line, sizeof(line), "E %s", presets[p].name);
+        assert(synth_control(&s, line) && s.selected == p);
         assert(synth_control(&s, p & 1 ? "T 1" : "T 0"));
         for (i = 0; i < 6000; i++) {
             if (i % 20 == 0) {
@@ -27,6 +36,11 @@ int main(void) {
                 assert(synth_control(&s, line));
             }
             if (i % 997 == 0) assert(synth_control(&s, i % 2 ? "S 3 4" : "S 4 3"));
+            if (i % 333 == 0) {
+                static const char *nm[NX] = {"offgas", "turbo", "bov", "pops", "bass"};
+                snprintf(line, sizeof(line), "X %s %d", nm[(i / 333) % NX], (i / 333) % 3);
+                assert(synth_control(&s, line));
+            }
             synth_render(&s, out, 256);
             for (j = 0; j < NP; j++) {
                 Voice *v = &s.voice[j];
@@ -38,6 +52,8 @@ int main(void) {
                 finite_pipe(&v->coll);
             }
             for (k = 0; k < 3; k++) assert(isfinite(s.env[k]) && isfinite(s.gr[k]));
+            for (k = 0; k < NX; k++) assert(s.xv[k] >= 0 && s.xv[k] <= 2);
+            assert(isfinite(s.bass.z1) && isfinite(s.bass.z2));
             for (j = 0; j < 512; j++) assert(abs(out[j]) <= 29164);
         }
     }

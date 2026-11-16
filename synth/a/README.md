@@ -17,7 +17,7 @@ make car
 `make host` produces `build/es-synth-host`. `make car` uses
 `$(HOME)/.local/zig/zig-aarch64-macos-0.17.1/zig` (override `ZIG`) with
 `-target x86_64-linux-gnu.2.27 -O2 -s`, then copies the stripped ELF to
-`../../tool/lfb-enginesound/es-synth-a`. The car target runs `file` and a dynamic
+`../tool/lfb-enginesound/es-synth`. The car target runs `file` and a dynamic
 symbol version check; details are saved in `build/glibc-symbols.txt`.
 Both targets use only libc and libm; Linux also links libdl. Python 3, without
 third-party packages, supports offline verification and sample packaging.
@@ -28,9 +28,11 @@ limiter bounds, all four demo levels, relative sample-slope outliers, firing
 pitch at 1,800 and 3,600 RPM, spectral brightening under load, V8 half orders /
 I6 smoothness, the V8/V10 crackle window after a lift-off (crest factor right
 after the lift against steady load), gear-shift level continuity (the same
-drive rendered with and without `S` events, an rpm step against the 8000 rpm/s
-ramp, an overrun downshift: the envelope may not move more than 3 dB; and every
-upshift of the four demo renders stays within 3.5 dB of the settled levels),
+drive rendered with and without `S` events, and an overrun downshift: the
+envelope may not move more than 3 dB; an rpm step and every upshift of the four
+demo renders stay within 3 / 3.5 dB of the settled levels), the `X` settings
+(each changes what it should, 0 removes turbo/bov/pops, offgas leaves full load
+alone, no clicks while changing them),
 rapid engine switching, RPM jumps, malformed commands, mute, quit and stale-input fading. It then prints a 60-second benchmark for
 all presets. FFT tests use Hann windows and are objective regressions, not a
 substitute for listening. `build/` contains additional stereo test renders.
@@ -86,17 +88,38 @@ Newline-terminated ASCII on stdin, typically 20–100 Hz:
 | `T 0\|1` | Disable/enable subtle turbo, including on normally NA presets if explicitly requested |
 | `V 0..1` | Smooth master level |
 | `M 0\|1` | Unmute/mute, approximately 300 ms to 95% of destination |
-| `S fromGear toGear` | Upshift: gentle 15 % torque reduction over 320 ms; downshift: small rev-match blip. No cut, nothing restarts |
+| `S fromGear toGear` | A gear change of the car's automatic (ZF 8HP). Upshift: crisp 20 % torque reduction (peak at 72 ms, over by 180 ms); downshift: small rev-match blip. No cut, nothing restarts |
+| `X name value` | A sound setting, see below |
 | `Q` | Fade out, exit after 800 ms |
 
 Malformed/nonfinite values and unknown engine names are ignored; finite P
 parameters are clamped to safe ranges. Overlong input lines are discarded.
 Only one bounded nonblocking read occurs per block; stdin never waits on a line.
 No P for 1.5 seconds fades out, including on initial startup. New data fades back
-in. RPM/load/throttle/speed and volume are smoothed every sample (RPM is also
-slew-limited to 8000 rpm/s, so a telemetry step sounds like the car's ~0.4 s
-ramp); shift envelopes and source phase never reset on a parameter change. Speed/gear are retained for
-the controller, not used to infer RPM: the external daemon owns that mapping.
+in. RPM/load/throttle/speed and volume are smoothed every sample; shift
+envelopes and source phase never reset on a parameter change. Speed/gear are
+retained for the controller, not used to infer RPM: the external daemon owns
+that mapping.
+
+**Response.** The sound follows the `P` rpm with about 20 ms of smoothing: two
+cascaded 5 ms one-poles, so a telemetry step reaches 90 % in 19.4 ms as a short
+rounded ramp, not a click (load and throttle: two 6 ms one-poles, ~23 ms). No
+slew limits: a gear change sounds as quick as it is in the car. The output buffer
+adds the device's own latency (SmartX: 64 ms).
+
+### Sound settings (`X`)
+
+Values are multipliers, 0..2, 1 = the engine's own default. Changes are smoothed
+(~60 ms, no clicks) and kept across `E`. Unknown names, values outside 0..2 and
+non-finite values are ignored.
+
+| Name | |
+|---|---|
+| `offgas` | the level off the throttle (idle, coasting, light load) against the level under load. Linear: 0 silences the off-throttle sound, 2 doubles it; the effect fades out as the load reaches ~0.6, so full load is unchanged |
+| `turbo` | turbo whistle / spool level (0 = none; `T 0` also switches it off) |
+| `bov` | blow-off / recirculation whoosh when lifting after boost (0 = none): a 1-3 kHz recirculation whoosh plus a short surge flutter |
+| `pops` | pops, bangs and crackle on the overrun (0 = none, 1 = subtle, 2 = loud sport exhaust, more often: event rate x pops^2 plus a floor so every engine pops, louder events, a 2x longer window, lower rpm/heat thresholds) |
+| `bass` | low end below about 150 Hz (a smooth low shelf at 150 Hz, about ±9 dB at 0 / 2) |
 
 ALSA is loaded using `dlopen("libasound.so.2")` and manually declared opaque
 function pointers, including open/set_params/writei/recover/delay/drop/close.
@@ -163,16 +186,17 @@ combustion down and adds coast noise and shaper drive. A lift-off from
 sustained load (0.5 s average >= 0.25, once per lift) on a hot engine opens a 0.2-0.7 s crackle
 window with a few Poisson events (unburnt fuel lighting in the pipe), injected
 upstream of the pipes so they ring through them; V8/V10 crackle most, the V12
-barely. Shifts are modelled on a ZF 8HP automatic, which shifts without an
-audible cut: an `S` upshift is a smooth u^2(1-u)^3 torque reduction (-15 % load
-at its peak, 320 ms), combustion never stops; an `S` downshift is a small
+barely (`X pops` scales all of it). Shifts are modelled on a ZF 8HP automatic, which shifts without an
+audible cut: an `S` upshift is a smooth u^2(1-u)^3 torque reduction starting on
+the S line (-20 % load at its peak at 72 ms, over by 180 ms), combustion never stops; an `S` downshift is a small
 rev-match blip (+0.2 load, 30 ms rise, 120 ms decay). The rpm comes from the
 telemetry (the demo ramps it through each shift like the car does). A throttle
 stab gives a short bark, but only from a low-load state, so the load recovering
 after a shift never barks; neither a shift dip nor a blip can open a crackle
-window, and the turbo flutter needs a real throttle closure. The whole voice follows load and rpm (idle ~16 dB under a
-full-load pull, cruise ~13 dB under) because Engine_Sim's fixed-RMS source and
-dynamics would leave idle only ~6 dB under a pull.
+window, and the turbo flutter needs a real throttle closure. The whole voice follows load and rpm: off the throttle (idle,
+coasting, light load) it sits ~7-10 dB under a full-load pull, with a +4 dB
+off-throttle lift that `X offgas` scales (demo: idle 6.8-10.4 dB, overrun
+7.1-8.7 dB under the pull; full load unchanged).
 
 **Master chain** (Engine_Sim `engine-sim.js`, `fx.js`): infrasonic guard (36 Hz,
 4th order), bass enhancer, rumble shelf, 78 Hz body bump, presence/air cuts,
