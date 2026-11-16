@@ -18,6 +18,13 @@ const PRESETS = {
     v12: { title: 'V12', sub: 'smooth, naturally aspirated', idle: 700, red: 7500, turbo: false },
 };
 const ORDER = ['i6', 'v8', 'v10', 'v12'];
+/* The sound engines to compare (synth/<id>/ in the repository, es-synth-<id> in the service). Each one plays all four
+ * engines; the service plays the chosen one (ENGINE <id>). */
+const SOUND_ENGINES = [
+    { id: 'classic', title: 'Classic', sub: 'first version' },
+    { id: 'a', title: 'A', sub: 'Engine_Sim style, rewritten' },
+    { id: 'b', title: 'B', sub: 'Engine_Sim, ported 1:1' },
+];
 
 const { DEVICE } = require('./route');
 
@@ -96,15 +103,18 @@ class Core {
         this.timer = setInterval(() => this.tick(), SEND_MS);
     }
 
+    soundEngine() { const e = this.settings.get('soundEngine'); return SOUND_ENGINES.some((x) => x.id === e) ? e : SOUND_ENGINES[0].id; }
+
     _applySettings() {
         const p = this.preset();
+        this.daemon.send('ENGINE ' + this.soundEngine());
         this.daemon.send('E ' + p);
         this.daemon.send('T ' + (PRESETS[p].turbo && this.settings.get('turbo') !== false ? 1 : 0));
         this.daemon.send('V ' + (clamp(Number(this.settings.get('volume')) || 60, 0, 100) / 100).toFixed(2));
     }
 
     onSetting(key) {
-        if (key === 'engine' || key === 'turbo' || key === 'volume') this._applySettings();
+        if (key === 'engine' || key === 'turbo' || key === 'volume' || key === 'soundEngine') this._applySettings();
     }
 
     tick() {
@@ -152,4 +162,4 @@ class Core {
     }
 }
 
-module.exports = { Core, PRESETS, ORDER };
+module.exports = { Core, PRESETS, ORDER, SOUND_ENGINES };

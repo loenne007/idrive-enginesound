@@ -17,7 +17,7 @@ make car
 `make host` produces `build/es-synth-host`. `make car` uses
 `$(HOME)/.local/zig/zig-aarch64-macos-0.17.1/zig` (override `ZIG`) with
 `-target x86_64-linux-gnu.2.27 -O2 -s`, then copies the stripped ELF to
-`../tool/lfb-enginesound/es-synth`. The car target runs `file` and a dynamic
+`../../tool/lfb-enginesound/es-synth-classic`. The car target runs `file` and a dynamic
 symbol version check; details are saved in `build/glibc-symbols.txt`.
 Both targets use only libc and libm; Linux also links libdl. Python 3, without
 third-party packages, supports offline verification and sample packaging.
@@ -39,7 +39,7 @@ the identical right channel to satisfy the size ceiling.
 ## Use
 
 ```
-./es-synth --out alsa:plug:smartx:OAPGenericOverlay_CF_48_STEREO --preset v8 --volume 0.8
+./es-synth-classic --out alsa:plug:smartx:CarLifeMedia_CF_48_STEREO --preset v8 --volume 0.8
 ./build/es-synth-host --out wav:build/demo.wav --demo 40 --preset v10
 ./build/es-synth-host --out wav:build/events.wav --script build/drive.txt
 ./es-synth --out raw --preset i6

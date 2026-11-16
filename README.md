@@ -23,7 +23,7 @@ Developed for a G20 320d.
 
 ```
  car (SOME/IP)                     app lfb_enginesound (Node 8, autostart)            service lfb-enginesound
- rpm, gear, torque, speed,  ──▶   maps the car's rpm onto the engine's rev range,  ──▶  esd.js ──▶ es-synth (C)
+ rpm, gear, torque, speed,  ──▶   maps the car's rpm onto the engine's rev range,  ──▶  esd.js ──▶ es-synth-<id> (C)
  driving mode                      load from torque, on/off logic, audio routing         Unix socket    │
                                    (GENIVI AudioManager: CarLifeMedia → speakers)                             ▼
                                                                                     ALSA → SmartX → car speakers
@@ -44,12 +44,29 @@ seconds after it stops (engine off, switched off, or not in Sport with *Only in 
 
 **Test sound** plays 10 s of beeps through the same route, also with the engine off.
 
+## Sound engines
+
+Several synthesizers ("sound engines") are installed side by side, each playing all four engines, to compare them in
+the car: *Settings → Sound engine* (or the buttons under the engine list). Each one is a folder `synth/<id>/` with its
+own C source and tests, built into `tool/lfb-enginesound/es-synth-<id>`; the service runs the chosen one.
+
+| Id | |
+|---|---|
+| `classic` | the first version |
+| `a` | rewritten around Engine_Sim's sound path (agent A) |
+| `b` | Engine_Sim ported 1:1 (agent B) |
+
+A new engine: a new `synth/<id>/` (same command line and control lines, see `synth/classic/README.md`), its binary in
+the tool's `component.json` `files`, its entry in `SOUND_ENGINES` (`apps/lfb_enginesound/core.js`) and in the
+`soundEngine` setting (`app.json`).
+
 ## Settings
 
 | Setting | |
 |---|---|
 | Engine sound | on / off (also the **On / Off** button) |
 | Engine | inline-6, V8, V10, V12 (also **Next engine**) |
+| Sound engine | which synthesizer plays (above) |
 | Volume | 10–100 % of the synth's level (the car's own volume knob applies on top) |
 | Only in Sport mode | plays only while the driving mode is Sport |
 | Turbo sound | the inline-6's and V8's turbo whine and blow-off |
@@ -60,8 +77,8 @@ seconds after it stops (engine off, switched off, or not in Sport with *Only in 
 | Path | |
 |---|---|
 | `apps/lfb_enginesound/` | the app: `main.js` (UI, background), `core.js` (mapping, on/off), `route.js` (AudioManager), `daemon.js` (socket client) |
-| `tool/lfb-enginesound/` | the service: `esd.js`, the prebuilt `es-synth` (x86-64, glibc ≤ 2.27), its systemd unit and `component.json` |
-| `synth/` | the synthesizer's C source, Makefile, tests, sample renders ([synth/README.md](synth/README.md)) |
+| `tool/lfb-enginesound/` | the service: `esd.js`, the prebuilt `es-synth-<id>` per sound engine (x86-64, glibc ≤ 2.27), its systemd unit and `component.json` |
+| `synth/<id>/` | each sound engine's C source, Makefile, tests, sample renders (e.g. [synth/classic/README.md](synth/classic/README.md)) |
 | `kit/` | the MGU app kit from [idrive7-apps](https://github.com/cauliflowermossgrape/idrive7-apps) (MIT) |
 | `mgu-repo.json` | the Store's repo-tree manifest: the head unit builds the app from source |
 
@@ -69,9 +86,9 @@ Develop on a computer:
 
 ```sh
 node test/core.test.js                       # the app's mapping and on/off logic
-make -C synth host && sh synth/test.sh       # the synthesizer, rendered and checked offline
-synth/build/es-synth-host --out wav:v8.wav --demo 40 --preset v8   # listen to a demo drive
-make -C synth car                            # the head unit's binary (needs zig 0.17)
+make -C synth test                           # every sound engine, rendered and checked offline
+synth/classic/build/es-synth-host --out wav:v8.wav --demo 40 --preset v8   # listen to a demo drive
+make -C synth car                            # the head unit's binaries (needs zig 0.17)
 ```
 
 ## Credits

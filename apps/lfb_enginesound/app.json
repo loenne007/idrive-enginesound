@@ -2,7 +2,7 @@
   "id": "lfb_enginesound",
   "title": "Engine Sound",
   "description": "A synthesized petrol engine (inline-6, V8, V10, V12) on the car's speakers, following the car's real rpm, gear and load",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "vendor": "loenne007",
   "license": "MIT",
   "loggingId": "LFES",
@@ -12,7 +12,7 @@
   ],
   "autostart": true,
   "requires": {
-    "lfb-enginesound": "0.1.0"
+    "lfb-enginesound": "0.2.0"
   },
   "signals": {
     "de.bmw.infotainment.vehicle.CDS": {
@@ -103,6 +103,26 @@
         [
           "v12",
           "V12"
+        ]
+      ]
+    },
+    {
+      "key": "soundEngine",
+      "label": "Sound engine",
+      "type": "choice",
+      "default": "classic",
+      "options": [
+        [
+          "classic",
+          "Classic (first version)"
+        ],
+        [
+          "a",
+          "A (Engine_Sim style, rewritten)"
+        ],
+        [
+          "b",
+          "B (Engine_Sim, ported 1:1)"
         ]
       ]
     },

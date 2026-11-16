@@ -1,14 +1,14 @@
 'use strict';
 /**
  * daemon.js - the line protocol to the Engine Sound service (tool lfb-enginesound, esd.js) on its Unix socket.
- * Reconnects by itself; send() while disconnected drops the line, except the sticky ones (E/T/V/M/OUT), which are
+ * Reconnects by itself; send() while disconnected drops the line, except the sticky ones (ENGINE/OUT/E/T/V/M), which are
  * sent again on every (re)connect so the service always has the app's state.
  */
 const net = require('net');
 const EventEmitter = require('events');
 
 const SOCK = process.env.ES_CTL_SOCK || '/run/lfb-enginesound/ctl.sock';
-const STICKY = ['OUT', 'E', 'T', 'V', 'M'];
+const STICKY = ['ENGINE', 'OUT', 'E', 'T', 'V', 'M'];   // (in this order: the engine before the device)
 
 class Daemon extends EventEmitter {
     constructor(log, sock) {

@@ -14,7 +14,7 @@ const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
 const { withAlpha } = require('./kit/canvas');
 const Car = require('./kit/car');
-const { Core, PRESETS, ORDER } = require('./core');
+const { Core, PRESETS, ORDER, SOUND_ENGINES } = require('./core');
 const { Daemon } = require('./daemon');
 const { Route } = require('./route');
 
@@ -129,15 +129,24 @@ mgu.run({
             // engines
             G.panel(cv, t, 1076, 44, 500, 468, 'Engine');
             ORDER.forEach((k, i) => {
-                const q = PRESETS[k], sel = k === core.preset(), y = 100 + i * 92;
-                cv.roundRect(1100, y, 452, 80, 14, sel ? withAlpha(t.accent, 0.3) : withAlpha('#ffffff', 0.05));
-                if (sel) cv.strokeRoundRect(1100, y, 452, 80, 14, 2, t.accent);
-                cv.text(q.title, 1124, y + 36, 28, t.text, { font: 'bold' });
-                cv.text(q.sub + ' - ' + q.red + ' rpm', 1124, y + 64, 17, t.dim);
-                if (cv.own) cv.target(1100, y, 452, 80, () => { settings.set('engine', k); return redraw(); }, 'eng-' + k);
+                const q = PRESETS[k], sel = k === core.preset(), y = 96 + i * 76;
+                cv.roundRect(1100, y, 452, 68, 14, sel ? withAlpha(t.accent, 0.3) : withAlpha('#ffffff', 0.05));
+                if (sel) cv.strokeRoundRect(1100, y, 452, 68, 14, 2, t.accent);
+                cv.text(q.title, 1124, y + 32, 26, t.text, { font: 'bold' });
+                cv.text(q.sub + ' - ' + q.red + ' rpm', 1124, y + 56, 16, t.dim);
+                if (cv.own) cv.target(1100, y, 452, 68, () => { settings.set('engine', k); return redraw(); }, 'eng-' + k);
             });
-            const tb = PRESETS[core.preset()].turbo;
-            cv.text(tb ? 'Turbo sound: ' + (settings.get('turbo') !== false ? 'on' : 'off') + ' (Settings)' : 'Naturally aspirated', 1124, 488, 17, t.dim);
+            // the sound engine (es-synth-<id>): which synthesizer plays; greyed = not in the installed service
+            const have = daemon.status && daemon.status.engines, se = core.soundEngine();
+            cv.text('SOUND ENGINE', 1100, 422, 15, t.dim, { font: 'bold', spacing: 1.5 });
+            const sw = (452 - 8 * (SOUND_ENGINES.length - 1)) / SOUND_ENGINES.length;
+            SOUND_ENGINES.forEach((x, i) => {
+                const there = !have || have.indexOf(x.id) >= 0;
+                G.button(cv, t, 1100 + i * (sw + 8), 432, sw, 48, x.title, there ? () => { settings.set('soundEngine', x.id); return redraw(); } : null,
+                    { primary: x.id === se, key: 'se-' + x.id, busy: !there });
+            });
+            const cur = SOUND_ENGINES.find((x) => x.id === se);
+            cv.text(cur.sub + (PRESETS[core.preset()].turbo ? ' - turbo ' + (settings.get('turbo') !== false ? 'on' : 'off') : ''), 1100, 502, 15, t.dim);
         }
 
         async function render() {

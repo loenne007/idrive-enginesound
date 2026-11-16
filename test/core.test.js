@@ -5,7 +5,7 @@ const { Core, PRESETS } = require('../apps/lfb_enginesound/core');
 const { DEVICE } = require('../apps/lfb_enginesound/route');
 
 function make(over) {
-    const vals = Object.assign({ enabled: true, engine: 'v8', volume: 60, mode: 'mix', sportOnly: false, rpmMap: 'scaled', realRedline: 4800, maxTorque: 400, turbo: true }, over || {});
+    const vals = Object.assign({ enabled: true, engine: 'v8', soundEngine: 'a', volume: 60, mode: 'mix', sportOnly: false, rpmMap: 'scaled', realRedline: 4800, maxTorque: 400, turbo: true }, over || {});
     const sent = [], routed = [];
     let t = 1000;
     const core = new Core({
@@ -46,7 +46,7 @@ function make(over) {
 {
     const { core, sent, routed, step } = make();
     core.start();
-    assert(sent.indexOf('M 1') >= 0 && sent.indexOf('E v8') >= 0 && sent.indexOf('V 0.60') >= 0);
+    assert(sent.indexOf('ENGINE a') >= 0 && sent.indexOf('M 1') >= 0 && sent.indexOf('E v8') >= 0 && sent.indexOf('V 0.60') >= 0);
     core.tick();
     assert.strictEqual(core.reason, 'no engine data');
     core.feed({ rpm: 1500, speed: 30, gear: 2, torque: 120 });
