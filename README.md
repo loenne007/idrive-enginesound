@@ -52,11 +52,10 @@ own C source and tests, built into `tool/lfb-enginesound/es-synth-<id>`; the ser
 
 | Id | |
 |---|---|
-| `classic` | the first version |
 | `a` | rewritten around Engine_Sim's sound path (agent A) |
 | `b` | Engine_Sim ported 1:1 (agent B) |
 
-A new engine: a new `synth/<id>/` (same command line and control lines, see `synth/classic/README.md`), its binary in
+A new engine: a new `synth/<id>/` (same command line and control lines, see [synth/PROTOCOL.md](synth/PROTOCOL.md)), its binary in
 the tool's `component.json` `files`, its entry in `SOUND_ENGINES` (`apps/lfb_enginesound/core.js`) and in the
 `soundEngine` setting (`app.json`).
 
@@ -78,7 +77,7 @@ the tool's `component.json` `files`, its entry in `SOUND_ENGINES` (`apps/lfb_eng
 |---|---|
 | `apps/lfb_enginesound/` | the app: `main.js` (UI, background), `core.js` (mapping, on/off), `route.js` (AudioManager), `daemon.js` (socket client) |
 | `tool/lfb-enginesound/` | the service: `esd.js`, the prebuilt `es-synth-<id>` per sound engine (x86-64, glibc ≤ 2.27), its systemd unit and `component.json` |
-| `synth/<id>/` | each sound engine's C source, Makefile, tests, sample renders (e.g. [synth/classic/README.md](synth/classic/README.md)) |
+| `synth/<id>/` | each sound engine's C source, Makefile, tests, sample renders (e.g. [synth/a/README.md](synth/a/README.md)) |
 | `kit/` | the MGU app kit from [idrive7-apps](https://github.com/cauliflowermossgrape/idrive7-apps) (MIT) |
 | `mgu-repo.json` | the Store's repo-tree manifest: the head unit builds the app from source |
 
@@ -87,7 +86,7 @@ Develop on a computer:
 ```sh
 node test/core.test.js                       # the app's mapping and on/off logic
 make -C synth test                           # every sound engine, rendered and checked offline
-synth/classic/build/es-synth-host --out wav:v8.wav --demo 40 --preset v8   # listen to a demo drive
+synth/a/build/es-synth-host --out wav:v8.wav --demo 40 --preset v8   # listen to a demo drive
 make -C synth car                            # the head unit's binaries (needs zig 0.17)
 ```
 

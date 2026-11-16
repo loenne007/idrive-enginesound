@@ -25,7 +25,7 @@ const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 const RUN_DIR = process.env.ES_RUN_DIR || '/run/lfb-enginesound';
 const SOCK = path.join(RUN_DIR, 'ctl.sock');
 const SYNTH_DIR = process.env.ES_SYNTH_DIR || __dirname;

@@ -21,7 +21,6 @@ const ORDER = ['i6', 'v8', 'v10', 'v12'];
 /* The sound engines to compare (synth/<id>/ in the repository, es-synth-<id> in the service). Each one plays all four
  * engines; the service plays the chosen one (ENGINE <id>). */
 const SOUND_ENGINES = [
-    { id: 'classic', title: 'Classic', sub: 'first version' },
     { id: 'a', title: 'A', sub: 'Engine_Sim style, rewritten' },
     { id: 'b', title: 'B', sub: 'Engine_Sim, ported 1:1' },
 ];
