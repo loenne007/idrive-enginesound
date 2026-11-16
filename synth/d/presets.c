@@ -25,7 +25,7 @@ const Preset presets[NP] = {
          {9.0f, {-29, -24, -21, -24}, {-12, -13, -14, -14}},
          {12.0f, {-36, -30, -27, -30}, {-14, -15, -16, -16}},
      },
-     {0, 0, 0, 0, 0, 0, 0, 0}, 0.f, .025f, .045f, .10f, -.5f, 0.f, -1.5f, -51.f, 430, 820, 2.f, .5f, -36.f, -5.f, 0.f},
+     {0, 0, 0, 0, 0, 0, 0, 0}, 0.f, .025f, .045f, .10f, 0.f, 0.f, 2.5f, -51.f, 430, 820, 2.f, .5f, -36.f, -5.f, 0.f},
     /* Audi 4.0 V8 TDI (SQ7): cross-plane V8, order 4 main, a restrained order 2 (the B47 has its own), the uneven
      * per-bank firing (1-5-4-8-6-3-7-2: banks A B A B B A B A) gives the deep 1 / 3 rumble, 6 and 8 the push. */
     {"v8", 8, 0, 800, 5000, 10,
@@ -41,7 +41,7 @@ const Preset presets[NP] = {
          {8.0f, {-23, -15, -13, -17}, {-11, -12, -13, -13}},
          {10.0f, {-36, -30, -28, -31}, {-13, -14, -15, -15}},
      },
-     {1, -1, 1, -1, -1, 1, -1, 1}, .05f, .02f, .05f, .15f, -.5f, 1.f, -1.5f, -50.f, 400, 760, 3.f, .8f, -37.f, -6.f, .6f},
+     {1, -1, 1, -1, -1, 1, -1, 1}, .05f, .02f, .05f, .15f, 0.f, 1.f, 2.5f, -50.f, 400, 760, 3.f, .8f, -37.f, -6.f, .6f},
     /* Audi 3.0 V6 TDI (S6 / S7): the burble. Two banks of three (1-4-3-6-2-5) give the 1.5 / 4.5 / 7.5 half-order
      * family on top of order 3; they stay up off the gas and grow on the overrun, and wobble slowly. */
     {"v10", 6, 0, 800, 5000, 8,
@@ -55,7 +55,7 @@ const Preset presets[NP] = {
          {9.0f, {-32, -27, -25, -29}, {-12, -13, -14, -14}},
          {10.5f, {-34, -31, -31, -36}, {-12, -13, -14, -14}},
      },
-     {1, -1, 1, -1, 1, -1, 0, 0}, .04f, .02f, .055f, .28f, -1.f, 2.5f, -2.f, -51.f, 400, 780, 3.f, 1.f, -36.f, -4.f, -.3f},
+     {1, -1, 1, -1, 1, -1, 0, 0}, .04f, .02f, .055f, .28f, -1.f, 2.5f, 2.f, -51.f, 400, 780, 3.f, 1.f, -36.f, -4.f, -.3f},
     /* the same V6 TDI in a sport / dynamic calibration: more half orders and less off-gas reduction, deeper wobble,
      * brighter under load, more overrun burble */
     {"v12", 6, 0, 800, 5000, 8,
@@ -69,7 +69,7 @@ const Preset presets[NP] = {
          {9.0f, {-30, -24, -21, -25}, {-11, -12, -13, -13}},
          {10.5f, {-32, -28, -27, -32}, {-11, -12, -13, -13}},
      },
-     {1, -1, 1, -1, 1, -1, 0, 0}, .05f, .02f, .06f, .32f, -1.f, 2.5f, -3.f, -50.f, 430, 860, 3.5f, 1.5f, -34.f, -2.f, -2.f},
+     {1, -1, 1, -1, 1, -1, 0, 0}, .05f, .02f, .06f, .32f, -1.f, 2.f, .5f, -50.f, 430, 860, 3.5f, 1.5f, -34.f, -2.f, -2.f},
 };
 
 int preset_find(const char *s) {

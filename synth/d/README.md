@@ -58,8 +58,14 @@ gain tables (rpm x load, dB) -> 12 ms up / 50 ms down -> order bank  sum_k g_k s
 * **Order tables** (`presets.c`). Each order has a dB value at full positive load at 800 / 1600 / 2800 / 4300 rpm,
   plus an off-gas offset. These are interpolated linearly in dB over rpm and load
   (`w = clamp(load,0,1)^0.7`). On top come a common rpm trim (`RPM_TRIM`: the low band is held back for the bass
-  limit, and the sound grows towards the top like an ASD) and an overrun trim (integer orders -0.5..-1 dB, half
-  orders +1..+2.5 dB for the V presets: the overrun burble). Any order under 40..30 Hz fades out (no infrasound: at
+  limit, and the sound grows towards the top like an ASD) and an overrun trim (integer orders 0..-1 dB, half
+  orders +1..+2.5 dB for the V presets: the overrun burble).
+  **Off-gas sits about 4 dB under full load** (idle, light cruise, coasting: 3.1-5.7 dB over 800-4300 rpm).
+* **Lift-off glide.** The load that sets the level rises quickly (15 ms, about 50-70 ms to full level with the
+  envelopes). It falls as a glide at 2 load-units per second, rounded with 60 ms, so a full lift takes about
+  0.5 s. The overrun trim glides in the same way. A lift sounds like going into overrun, not like a fade-out:
+  100 ms after it the level is within 0.5 dB of before, and after 300 ms it is down 1-3 dB. The pops, sigh and
+  turbo detectors still use the fast load. Any order under 40..30 Hz fades out (no infrasound: at
   800 rpm order 1.5 is 20 Hz and order 3, at 40 Hz, is the lowest left). Engine off (rpm < 300-600) is silent.
 * **Blend with the B47.** The B47's own firing order is 2. The six-cylinder presets add **no** order 2. They lean on
   3 / 6 / 9 (i6) or on 1.5 / 3 / 4.5 / 7.5 (V6). The V8 adds order 2 only about 24 dB below its main order 4, as
@@ -80,7 +86,7 @@ gain tables (rpm x load, dB) -> 12 ms up / 50 ms down -> order bank  sum_k g_k s
     400 to about 800 Hz. At 2500 rpm the energy share above 350 Hz rises from load 0.05 to 1 (i6 0.1 % -> 0.6 %;
     the added sound is deliberately bass-heavy, the B47 supplies the mids).
 * **Cabin.** A 28 Hz high-pass, a 120 Hz bass shelf (preset +2..+3.5 dB, `X bass` +-9 dB) and the load-dependent
-  low-pass. Gears 7 / 8 at low load get -2 dB (cruise). Idle is 3 dB quieter than the rest of the off-gas range.
+  low-pass. Gears 7 / 8 at low load get -2 dB (cruise). Idle is 1 dB quieter than the rest of the off-gas range.
 * **Boost proxy.** There is no boost telemetry. The proxy is `sstep(0.6, 0.95, load) x sstep(1600, 2600 rpm)`
   (500 ms up, 300 ms down), plus the time spent near full load (load > 0.8, > 1700 rpm).
 * **Turbo** is **off in D's own default**: `turbo_default` is false, and `E` switches it off. With `T 1` it is a
@@ -105,7 +111,7 @@ gain tables (rpm x load, dB) -> 12 ms up / 50 ms down -> order bank  sum_k g_k s
 
 | X | effect |
 |---|---|
-| `offgas` | scales the off-gas end of the tables (`20 log10(offgas)` dB): idle, light cruise and coasting. Full load is unchanged |
+| `offgas` | the off-gas end of the tables (idle, light cruise, coasting): 0..1 scales it (`20 log10(offgas)` dB, 0 = silent), 1..2 moves it towards the full-load table (2 = as loud as full load). Full load is unchanged |
 | `turbo` | the tonal whistle's level when `T 1` (0 = none; D's default is `T 0`) |
 | `bov` | recirculation sigh level (0 = none; only after real boost, see above) |
 | `pops` | overrun burble rate, window length and level (0 = none, 2 = more often and louder) |
@@ -125,7 +131,7 @@ measurement and spectrogram. **They are design targets, not recovered factory ca
 | full | -30/-29/-31/-36 | -27/-24/-26/-32 | -2/0/-1/-4 | -29/-26/-26/-30 | -13/-10/-9/-11 | -37/-34/-32/-36 | -29/-24/-21/-24 | -36/-30/-27/-30 |
 | off | -3/-3/-4/-4 | -5/-6/-6/-6 | -6 | -8/-8/-9/-9 | -9/-10/-10/-11 | -11/-12/-12/-12 | -12/-13/-14/-14 | -14/-15/-16/-16 |
 
-off_trim -1.5, random per firing 4.5 %, no bank pattern, half-order lump 0.10, pops 0.5, bass +2 dB, cabin LP
+off_trim +2.5, random per firing 4.5 %, no bank pattern, half-order lump 0.10, pops 0.5, bass +2 dB, cabin LP
 430-820 Hz.
 
 **`v8`: Audi 4.0 V8 TDI (SQ7).** Cross-plane V8, order 4 main, deep 1 / 3 rumble from the uneven per-bank firing.
@@ -135,7 +141,7 @@ off_trim -1.5, random per firing 4.5 %, no bank pattern, half-order lump 0.10, p
 | full | -20/-22/-26/-32 | -31/-29/-31/-36 | -26/-24/-27/-34 | -32/-30/-31/-36 | -19/-18/-20/-26 | -3/0/-1/-5 | -30/-27/-27/-31 | -20/-15/-15/-20 | -23/-15/-13/-17 | -36/-30/-28/-31 |
 | off | -2/-3/-3/-3 | -3 | -3/-4/-4/-4 | -4 | -4/-4/-5/-5 | -6 | -8 | -9/-10/-10/-10 | -11/-12/-13/-13 | -13/-14/-15/-15 |
 
-off_trim -1.5, bank pattern 5 %, random 5 %, lump 0.15, overrun half orders +1 dB, pops 0.8, bass +3 dB.
+off_trim +2.5, bank pattern 5 %, random 5 %, lump 0.15, overrun half orders +1 dB, pops 0.8, bass +3 dB.
 
 **`v10`: Audi 3.0 V6 TDI (S6 / S7) burble, the owner's main wish.** Two banks of three (firing 1-4-3-6-2-5) give the
 1.5 / 4.5 / 7.5 half orders on top of order 3. They stay up off the gas and grow on the overrun.
@@ -145,7 +151,7 @@ off_trim -1.5, bank pattern 5 %, random 5 %, lump 0.15, overrun half orders +1 d
 | full | -26/-27/-31/-36 | -12/-9/-11/-19 | -3/0/-1/-5 | -11/-10/-12/-21 | -16/-12/-11/-15 | -22/-20/-22/-29 | -32/-27/-25/-29 | -34/-31/-31/-36 |
 | off | -3/-3/-4/-4 | -3/-4/-5/-5 | -6 | -4/-5/-6/-6 | -9/-10/-10/-11 | -7/-8/-9/-9 | -12/-13/-14/-14 | -12/-13/-14/-14 |
 
-off_trim -2, bank 4 %, random 5.5 %, lump 0.28, overrun half orders +2.5 dB, pops 1, bass +3 dB.
+off_trim +2, bank 4 %, random 5.5 %, lump 0.28, overrun half orders +2.5 dB, pops 1, bass +3 dB.
 
 **`v12`: the same V6 TDI, "sport / dynamic" calibration.** More half orders and growl, less off-gas reduction,
 deeper lump, brighter under load, more overrun burble.
@@ -155,30 +161,33 @@ deeper lump, brighter under load, more overrun burble.
 | full | -25/-25/-29/-34 | -10/-7/-8/-16 | -2/0/0/-3 | -9/-8/-9/-18 | -15/-10/-9/-12 | -20/-17/-18/-25 | -30/-24/-21/-25 | -32/-28/-27/-32 |
 | off | -3 | -2/-3/-4/-4 | -5 | -3/-4/-5/-5 | -8/-9/-9/-10 | -6/-7/-8/-8 | -11/-12/-13/-13 | -11/-12/-13/-13 |
 
-off_trim -3, bank 5 %, random 6 %, lump 0.32, overrun half orders +2.5 dB, pops 1.5, bass +3.5 dB, cabin LP 430-860 Hz,
+off_trim +0.5, bank 5 %, random 6 %, lump 0.32, overrun half orders +2 dB, pops 1.5, bass +3.5 dB, cabin LP 430-860 Hz,
 output trim -2 dB.
 
 ## Measurements (test.sh, this host)
 
 | | i6 | v8 | v10 | v12 |
 |---|---|---|---|---|
-| demo RMS / peak, dBFS | -19.2 / -9.8 | -19.4 / -9.0 | -19.2 / -9.4 | -19.0 / -9.2 |
-| demo peak under 100 Hz (protection's detector), dBFS | -13.4 | -13.7 | -11.8 | -11.6 |
+| demo RMS / peak, dBFS | -18.9 / -10.6 | -19.0 / -9.9 | -18.8 / -10.2 | -18.9 / -10.0 |
+| demo peak under 100 Hz (protection's detector), dBFS | -14.1 | -14.2 | -12.4 | -12.2 |
 | energy under 28 Hz vs. total | -44 dB | -49 dB | -43 dB | -43 dB |
 | worst order frequency error (main orders, 1500 / 2600 / 4000 rpm) | 0.031 % | 0.077 % | 0.073 % | 0.041 % |
-| 2500 rpm, load 1 / 0.5 / 0.05 / 0 / -0.5, dBFS | -15.9/-19.0/-22.8/-23.8/-24.3 | -15.7/-18.8/-22.7/-23.8/-24.3 | -15.1/-18.3/-22.2/-23.2/-22.9 | -15.3/-18.5/-22.2/-23.2/-22.4 |
-| off-gas / coasting under full load | 8.0 / 8.4 dB | 8.1 / 8.6 dB | 8.0 / 7.8 dB | 7.9 / 7.1 dB |
-| `--bench 60`, x realtime (varies run to run) | 629 | 699 | 696 | 681 |
+| 2500 rpm, load 1 / 0.5 / 0.05 / 0 / -0.5, dBFS | -16.9/-18.5/-20.3/-20.8/-20.8 | -16.7/-18.2/-20.2/-20.8/-20.8 | -16.1/-17.7/-19.6/-20.2/-19.9 | -16.3/-18.1/-20.1/-20.7/-20.2 |
+| off-gas / coasting under full load | 4.0 / 3.9 dB | 4.1 / 4.1 dB | 4.0 / 3.8 dB | 4.4 / 3.9 dB |
+| lift at 2500 rpm: after 100 ms / 300 ms / settled | -0.1 / -1.5 / -4.1 dB | -0.5 / -1.0 / -4.1 dB | -0.3 / -1.5 / -4.2 dB | -0.3 / -3.2 / -4.7 dB |
+| tip-in back within 1.5 dB (45 ms window) | 50 ms | 50 ms | 70 ms | 60 ms |
+| `--bench 60`, x realtime (varies run to run) | 624 | 679 | 667 | 671 |
 
-* Off-gas against full load is 7.6-9.0 dB from 1500 to 4300 rpm in every preset (idle about 10.5 dB).
+* Off-gas against full load is 3.1-5.7 dB from 800 to 4300 rpm in every preset (version 2: 7.6-9 dB, idle 10.5).
+  check.py requires 3-5 dB at 2500 rpm, a lift within 2 dB after 100 ms, and a tip-in within 100 ms.
 * Rpm step 1500 -> 3000: 90 % after 23.3 ms, no overshoot. A 50 Hz telemetry ramp of -4000 rpm/s (ZF upshift):
   69 rpm tracking error (17 ms) and 4 rpm undershoot when the ramp stops.
 * Gear changes: the same drives with and without `S` lines (full-load upshift, overrun upshift, coasting
   downshift) differ by 0.00 dB. The five demo upshifts stay within 3 dB of the levels around them.
 * `X`: with `T 1` the whistle raises the 2-7 kHz band by 50 dB at full load. The default (`T 0`) and `X turbo 0`
-  leave nothing there. After a lift, the non-tonal 0.3-1.5 kHz band rises about 4 dB with the sigh, and the
-  non-tonal 60-700 Hz band rises about 4 dB with pops 2. `bass` 0 / 1 / 2 moves the low-vs-mid balance by about 6 dB per step. `offgas
-  0.5` gives -6.0 dB off the gas and 0.0 dB at full load. `X pops/bov/turbo 0` remove those layers exactly, and `T 0`
+  leave nothing there. After a lift, the non-tonal 0.3-1.5 kHz band in the first 170 ms rises 11-14 dB with the sigh,
+  and the non-tonal 60-700 Hz band over 0.68 s rises 1-2 dB with pops 2 (now over the louder coasting level). `bass` 0 / 1 / 2 moves the low-vs-mid balance by about 6 dB per step. `offgas
+  0.5` gives -6.0 dB off the gas and 0.0 dB at full load; `offgas 2` makes off-gas as loud as full load (-0.1..-0.2 dB). `X pops/bov/turbo 0` remove those layers exactly, and `T 0`
   removes the whistle exactly (test_core).
 * Quiet bands. These are measured at idle (800 rpm), cruise (2000 rpm, load 0.2) and coasting (2500 rpm, load
   -0.5), with every layer at its maximum (`T 1`, `X turbo/bov/pops 2`). Energy above 1.5 kHz is 71-79 dB under the
@@ -235,6 +244,6 @@ The research report `research4/REPORT.md` (16 Nov 2026) and the sources it cites
   `wobble` in `presets.c` (irregularity and burble), not the noise.
 * Turbo whistle, sigh and pops are stylised approximations (no boost or turbo-speed telemetry). The B47's fuel-cut
   overrun does not really crackle; the pops are an Audi-S-style effect, gentle by default.
-* Load is crank torque only. The off-gas / full-load balance (about 8 dB) assumes the app's load scale matches the
+* Load is crank torque only. The off-gas / full-load balance (about 4 dB) assumes the app's load scale matches the
   test scale.
 * Telemetry slower than about 20 Hz leaves rpm steps up to 50 ms old. The prediction only helps on steady ramps.

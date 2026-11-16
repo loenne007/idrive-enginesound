@@ -57,6 +57,7 @@ typedef struct {
     /* telemetry targets and smoothed values */
     float trpm, tload, tthrottle, tspeed;
     float rpm1, rpm, load, throttle, speed;
+    float lw, lw2, lov; /* the level's load (quick up, gliding down) and overrun amount */
     float pr_base, pr_slope, pr_h, pr_last_slope; /* rpm prediction along a consistent ramp */
     double pr_t0, last_p;
     int gear, selected, turbo, mute, quit;

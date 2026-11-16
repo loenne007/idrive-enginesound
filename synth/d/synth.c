@@ -18,7 +18,7 @@
 #include <string.h>
 
 #define REF .05f      /* linear amplitude of a 0 dB order before the output gain */
-#define OUT_GAIN 5.1f /* calibration: demo RMS about -19 dBFS */
+#define OUT_GAIN 4.55f /* calibration: demo RMS about -19 dBFS */
 #define FLOOR_LO 30.f /* orders fade out below FLOOR_HI .. FLOOR_LO Hz (no infrasound) */
 #define FLOOR_HI 40.f
 /* layer mask for measurements (cc -DES_LAYERS=...): 1 pulse noise, 2 turbo, 4 sigh, 8 pops, 16 phase jitter, 32 orders */
@@ -40,7 +40,7 @@ static const int BANK8[8] = {1, -1, 1, -1, -1, 1, -1, 1};
 static float tab_full[NP][NH + 1][NK], tab_off[NP][NH + 1][NK];
 static unsigned char tab_has[NP][NH + 1];
 static float ph_c[NH + 1], ph_s[NH + 1]; /* fixed phase of each harmonic */
-static float k_att, k_rel, k_rpm, k_load, k_x, k_w, k_spool_up, k_spool_dn, k_slow;
+static float k_att, k_rel, k_rpm, k_load, k_glide, k_x, k_w, k_spool_up, k_spool_dn, k_slow;
 
 static void tables(void) {
     int p, r, k, j;
@@ -67,6 +67,7 @@ static void tables(void) {
     k_rel = tau_k(.050f, CTRL);
     k_rpm = tau_k(.006f, CTRL);
     k_load = tau_k(.015f, CTRL);
+    k_glide = tau_k(.06f, CTRL);
     k_x = tau_k(.05f, CTRL);
     k_w = tau_k(.08f, CTRL);
     k_spool_up = tau_k(.5f, CTRL);
@@ -186,7 +187,7 @@ static int firing(Synth *s, Firing *f, float pos, const int *bank, float bank_tr
 
 static void control(Synth *s) {
     const float dtc = (float)CTRL / SR;
-    float rpm, load, w, ov, odb, cruise, on, wsum = 0, fr, x;
+    float rpm, load, w, ov, odb, ofull, cruise, on, wsum = 0, fr, x;
     float tex_db = 0, lp_lo = 0, lp_hi = 0, bass_db = 0, pops = 0, turbo_db = 0, bov_db = 0, wobble = 0;
     int i, k, idx;
     /* smoothing of the settings and the crossfade weights */
@@ -211,11 +212,23 @@ static void control(Synth *s) {
     s->speed += (s->tspeed - s->speed) * tau_k(.1f, CTRL);
     rpm = s->rpm;
     load = s->load;
+    /* the level's load: up quickly (tip-in ~50 ms with the envelopes), down as a glide at 2 / s (a full lift
+     * takes ~0.5 s: it sounds like going into overrun, not like a fade-out); the overrun trim glides in alike */
     w = powf(clampf(load, 0, 1), .7f);
+    if (w > s->lw)
+        s->lw += (w - s->lw) * k_load;
+    else
+        s->lw = fmaxf(w, s->lw - 2 * dtc);
+    s->lw2 += (s->lw - s->lw2) * (s->lw > s->lw2 ? k_rpm : k_glide);
+    w = s->lw2;
     ov = sstep(-.02f, -.25f, load);
-    odb = 20 * log10f(fmaxf(s->x[X_OFFGAS], .001f));
-    /* -2 dB cruising in 7th / 8th at low load; idle a little quieter than the rest of the off-gas range */
-    cruise = (s->gear >= 7 ? -2.f * (1 - w) : 0) - 3.f * (1 - sstep(900, 1400, rpm)) * (1 - w);
+    s->lov = ov > s->lov ? fminf(ov, s->lov + 2 * dtc) : s->lov + (ov - s->lov) * k_load;
+    ov = s->lov;
+    /* X offgas: 0..1 scales the off-gas end (dB), 1..2 moves it towards the full-load table (2 = as loud) */
+    odb = 20 * log10f(fmaxf(fminf(s->x[X_OFFGAS], 1), .001f));
+    ofull = fmaxf(s->x[X_OFFGAS] - 1, 0);
+    /* -2 dB cruising in 7th / 8th at low load; idle 1 dB quieter than the rest of the off-gas range */
+    cruise = (s->gear >= 7 ? -2.f * (1 - w) : 0) - 1.f * (1 - sstep(900, 1400, rpm)) * (1 - w);
     on = sstep(300, 600, rpm);
     /* rpm knot position */
     idx = 0;
@@ -233,6 +246,7 @@ static void control(Synth *s) {
             if (!tab_has[i][k]) continue;
             full = interp(tab_full[i][k], idx, fr);
             off = interp(tab_off[i][k], idx, fr) + odb;
+            off += (full - off) * ofull;
             db = off + (full - off) * w + ov * ((k & 1) ? p->ov_half : p->ov_int) + cruise + p->gain;
             s->gt[k - 1] += wi * db2lin(db);
         }

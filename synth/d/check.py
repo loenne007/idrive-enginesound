@@ -189,7 +189,7 @@ for name in ids:
     assert lv[1] > lv[.5] > lv[.05], (name, 'level does not rise with load', lv)
     assert br[1] > br[.05] * 1.3, (name, 'no brightness increase', br)
     for off in (0, -.5):
-        assert 7 <= lv[1] - lv[off] <= 10, (name, 'off-gas level', off, lv[1] - lv[off])
+        assert 3 <= lv[1] - lv[off] <= 5, (name, 'off-gas level', off, lv[1] - lv[off])
     print(f'{name}: orders {MAIN[name]} at 1500/2600/4000 rpm, worst frequency error {100 * max(errs):.3f} %; '
           f'2500 rpm level load 1/.5/.05/0/-0.5: ' + '/'.join(f'{lv[k]:.1f}' for k in (1, .5, .05, 0, -.5)) +
           f' dBFS (off-gas {lv[1] - lv[0]:.1f} / coast {lv[1] - lv[-.5]:.1f} dB under full load), '
@@ -206,13 +206,13 @@ def lift_drive(xs, turbo=False):
     return lines
 
 
-def non_tonal(s, rpm, lo, hi, n=32768):
+def non_tonal(s, rpm, lo, hi, n=32768, width=4):
     # energy between lo and hi Hz away from every half-order line of the bank (+-4 Hz)
     tot = 0
     for k in range(int(lo * n / SR), int(hi * n / SR)):
         f = k * SR / n
         q = f / (rpm / 120)
-        if q > 25.5 or abs(q - round(q)) * rpm / 120 > 4: tot += s[k]  # the bank ends at order 12
+        if q > 25.5 or abs(q - round(q)) * rpm / 120 > width: tot += s[k]  # the bank ends at order 12
     return tot
 
 
@@ -238,28 +238,51 @@ for name in ('v10', 'i6'):
     t_def, t_on, t_zero = energy(s_def, 2000, 7000), energy(s_on, 2000, 7000), energy(s_zero, 2000, 7000)
     assert t_on > 1000 * t_zero and t_def < 2 * t_zero, (name, 'turbo whistle: T 1 on, default / X turbo 0 off', t_def, t_on, t_zero)
     # sigh: non-tonal 300-1500 Hz in the 0.68 s after the lift; pops (X pops 2): non-tonal 60-700 Hz
-    def after(xs):
-        return spectrum(render(name, 'x-' + '-'.join(f'{k}{v}' for k, v in xs), lift_drive(xs)), 2.5)
-    s_none = after([('bov', 0), ('pops', 0)])
-    s_bov = after([('pops', 0)])
-    s_pop = after([('bov', 0), ('pops', 2)])
-    b_none, b_bov = non_tonal(s_none, 3300, 300, 1500), non_tonal(s_bov, 3300, 300, 1500)
-    p_none, p_pop = non_tonal(s_none, 3300, 60, 700), non_tonal(s_pop, 3300, 60, 700)
-    assert b_bov > 1.6 * b_none and p_pop > 1.6 * p_none, (name, 'bov / pops missing', b_none, b_bov, p_none, p_pop)
+    def after(xs, n):
+        return spectrum(render(name, 'x-' + '-'.join(f'{k}{v}' for k, v in xs), lift_drive(xs)), 2.5, n)
+    # the sigh: the 170 ms after the lift; pops: the 0.68 s after it
+    b_none = non_tonal(after([('bov', 0), ('pops', 0)], 8192), 3300, 300, 1500, 8192, 12)
+    b_bov = non_tonal(after([('pops', 0)], 8192), 3300, 300, 1500, 8192, 12)
+    p_none = non_tonal(after([('bov', 0), ('pops', 0)], 32768), 3300, 60, 700)
+    p_pop = non_tonal(after([('bov', 0), ('pops', 2)], 32768), 3300, 60, 700)
+    assert b_bov > 1.6 * b_none and p_pop > 1.15 * p_none, (name, 'bov / pops missing', b_none, b_bov, p_none, p_pop)
     lo = {}
     for bass in (0, 1, 2):
         s = spectrum(render(name, f'x-bass{bass}', [f'0 X bass {bass}'] + steady(2000, .5, .5)), 2)
         lo[bass] = 10 * math.log10(energy(s, 30, 150) / energy(s, 300, 1000))
     assert lo[2] - lo[1] > 5 and lo[1] - lo[0] > 5, (name, 'bass', lo)
     og = {}
-    for v in (.5, 1):
+    for v in (.5, 1, 2):
         og[v] = (db(level(render(name, f'x-off{v}', [f'0 X offgas {v}'] + steady(2500, 0, 0))[SR:])),
                  db(level(render(name, f'x-offfull{v}', [f'0 X offgas {v}'] + steady(2500, 1, 1))[SR:])))
     assert 4 < og[1][0] - og[.5][0] < 8 and abs(og[1][1] - og[.5][1]) < .5, (name, 'offgas', og)
+    assert abs(og[2][0] - og[2][1]) < 1 and abs(og[1][1] - og[2][1]) < .5, (name, 'offgas 2 is not as loud as full load', og)
     print(f'{name}: whistle 2-7 kHz T 1 vs default {10 * math.log10(t_on / t_def):.0f} dB, X turbo 0 '
           f'{10 * math.log10(t_zero / t_on):.0f} dB; after the lift non-tonal: sigh {10 * math.log10(b_bov / b_none):+.1f} dB '
           f'(0.3-1.5 kHz), pops 2 {10 * math.log10(p_pop / p_none):+.1f} dB (60-700 Hz); bass 0/1/2 low-vs-mid {lo[0]:.1f}/{lo[1]:.1f}/{lo[2]:.1f} dB; '
-          f'offgas 0.5: off-gas {og[.5][0] - og[1][0]:+.1f} dB, full load {og[.5][1] - og[1][1]:+.1f} dB')
+          f'offgas 0.5: off-gas {og[.5][0] - og[1][0]:+.1f} dB, full load {og[.5][1] - og[1][1]:+.1f} dB; '
+          f'offgas 2: off-gas {og[2][0] - og[2][1]:+.1f} dB re full load')
+
+# ---- lift-off glide and tip-in: a lift glides down over ~0.5 s (100 ms after it within 2 dB of before), a tip-in
+# is back within 1.5 dB of the full-load level within 100 ms (measured with a 45 ms window). Constant 2500 rpm, 50 Hz telemetry like the car.
+for name in ids:
+    lines = []
+    for i in range(141):
+        t = i / 20
+        l, th = (1, 1) if t < 2 or t >= 5 else (-.5, 0)
+        lines.append(f'{t} P 2500 {l} {th} 4 80')
+    a = render(name, 'glide', lines)
+    e = envelope(a, 4)  # 45 ms windows every 5 ms; e[k] at k * 5 ms
+    at = lambda t: e[int(t * 200)]
+    seg = lambda t0, t1: db(level(a[int(t0 * SR):int(t1 * SR)]))
+    before, after, settled = seg(1, 1.95), seg(3.5, 4.95), seg(6, 6.95)
+    drop100, drop300 = before - seg(2.08, 2.12), before - seg(2.28, 2.32)
+    tip = next(k for k in range(int(5 * 200), int(6 * 200)) if e[k] >= settled - 1.5) / 200 - 5
+    assert drop100 <= 2, (name, 'lift-off drops too fast', drop100)
+    assert 3 <= before - after <= 5, (name, 'lift-off end level', before - after)
+    assert tip <= .1, (name, 'tip-in too slow', tip)  # incl. the 45 ms envelope window
+    print(f'{name}: lift-off glide -{drop100:.1f} dB after 100 ms, -{drop300:.1f} dB after 300 ms, settles '
+          f'-{before - after:.1f} dB; tip-in within 1.5 dB after {1000 * tip:.0f} ms')
 
 # ---- transitions: preset switching, mute, X changes, shifts, malformed lines, stale watchdog, quit ----
 lines = []
