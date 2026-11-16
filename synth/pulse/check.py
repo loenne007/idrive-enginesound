@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Engine C: objective regression checks (python3 stdlib only). Renders through build/es-synth-host --script.
+"""Pulse engine: objective regression checks (python3 stdlib only). Renders through build/es-synth-host --script.
 
 Levels are dB of RMS; envelopes are 10 ms RMS every 5 ms, energy-averaged. FFTs use Hann windows. These are
 objective regressions, not a substitute for listening."""
@@ -112,7 +112,7 @@ for p in info['presets']:
         e = envelope(a[int((ts - .5) * SR):int((ts + 1) * SR)], 16)
         lo, hi = window_ok(e, .5, 3)
         worst_shift = max(worst_shift, -lo, hi)
-        # 3.5 dB (engine A's demo limit): the V8's own roughness alone moves this 100 ms envelope by ~3 dB; the
+        # 3.5 dB (the Waveguide engine's demo limit): the V8's own roughness alone moves this 100 ms envelope by ~3 dB; the
         # strict 3 dB test compares the same drive with and without S below
         check(lo >= -3.5 and hi <= 3.5, f'{name}: demo upshift at {ts}s gap/onset {lo:.1f}/{hi:.1f} dB')
     print(f'{name}: demo RMS {r:.1f} dBFS, peak {db(peak):.1f} dBFS, slope ratio {worst:.1f}, '

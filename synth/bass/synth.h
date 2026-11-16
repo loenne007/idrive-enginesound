@@ -1,6 +1,6 @@
 #ifndef ES_SYNTH_H
 #define ES_SYNTH_H
-/* Engine D: active sound design for the car's own diesel. An rpm-locked order bank (the factory ASD / ESE
+/* The Bass sound engine: active sound design for the car's own diesel. An rpm-locked order bank (the factory ASD / ESE
  * principle) that enriches the real B47 instead of imitating a foreign engine; see README.md. */
 #include <stdint.h>
 
@@ -21,7 +21,7 @@ typedef struct {
 typedef struct {
     const char *name;
     int n, turbo;           /* cylinders; turbo on by default */
-    float idle, redline;    /* real diesel rpm (the app does not map rpm for engine D) */
+    float idle, redline;    /* real diesel rpm (the app does not map rpm for this engine) */
     int nrow;
     Row row[MAXROW];
     int bank[8];            /* bank of each firing slot (+1 / -1), firing order; 0 = inline */

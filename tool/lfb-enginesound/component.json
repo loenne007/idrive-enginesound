@@ -14,15 +14,15 @@
   },
   "files": [
     {
-      "path": "es-synth-a",
+      "path": "es-synth-pulse",
       "mode": "0755"
     },
     {
-      "path": "es-synth-c",
+      "path": "es-synth-waveguide",
       "mode": "0755"
     },
     {
-      "path": "es-synth-d",
+      "path": "es-synth-bass",
       "mode": "0755"
     },
     {

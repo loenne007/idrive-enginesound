@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dependency-free FFT, spectral and discontinuity regression checks."""
+"""Waveguide engine: dependency-free FFT, spectral and discontinuity regression checks."""
 import array,cmath,json,math,pathlib,subprocess,sys,wave
 ROOT=pathlib.Path(__file__).resolve().parent
 BIN=ROOT/'build/es-synth-host'

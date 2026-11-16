@@ -18,20 +18,29 @@ const PRESETS = {
     v12: { title: 'V12', sub: 'smooth, naturally aspirated', idle: 700, red: 7500, turbo: false },
 };
 const ORDER = ['i6', 'v8', 'v10', 'v12'];
-/* The sound engines to compare (synth/<id>/ in the repository, es-synth-<id> in the service). Each one plays all four
- * engines; the service plays the chosen one (ENGINE <id>). */
+/* The sound engines (synth/<id>/ in the repository, es-synth-<id> in the service): each one plays all four presets;
+ * the service runs the chosen one (ENGINE <id>). The first one is the default. */
 const SOUND_ENGINES = [
-    { id: 'a', title: 'A', sub: 'Engine_Sim style, rewritten' },
-    { id: 'c', title: 'C', sub: 'light and quick' },
-    // D emulates factory Active Sound Design: it enriches the car's own diesel, so it gets the REAL rpm, and its four
-    // presets are diesel characters (shown with these names)
-    { id: 'd', title: 'D', sub: 'bass for the diesel (Active Sound Design)', realRpm: true, presets: {
+    { id: 'pulse', title: 'Pulse', sub: 'light: pulses per cylinder, pipes, muffler' },
+    { id: 'waveguide', title: 'Waveguide', sub: "Engine_Sim's pipes and resonators" },
+    // Active Sound Design emulation: it adds rpm-locked low engine orders under the car's own diesel, so it gets the
+    // REAL rpm, and its four presets are diesel characters (shown with these names)
+    { id: 'bass', title: 'Bass', sub: 'Active Sound: bass under the real diesel', realRpm: true, presets: {
         i6: { title: 'Straight-6 diesel', sub: 'BMW B57, X7 40d style' },
         v8: { title: 'V8 TDI', sub: 'Audi SQ7 style' },
         v10: { title: 'V6 TDI', sub: 'Audi S6 / S7 style burble' },
         v12: { title: 'V6 TDI Sport', sub: 'stronger, dynamic calibration' } } },
 ];
-const soundEngineOf = (id) => SOUND_ENGINES.find((x) => x.id === id) || SOUND_ENGINES[0];
+const DEFAULT_SOUND_ENGINE = SOUND_ENGINES[0].id;
+/* Sound engine ids saved by versions before 1.0 (setting soundEngine): a -> waveguide, b (removed) -> pulse,
+ * c -> pulse, d -> bass. app.json's "aliases" maps them when the settings load; soundEngineId() does it again. */
+const LEGACY_SOUND_ENGINES = { a: 'waveguide', b: 'pulse', c: 'pulse', d: 'bass' };
+/** A stored soundEngine value as a current id (old ids mapped, unknown -> the default). */
+function soundEngineId(v) {
+    const id = Object.prototype.hasOwnProperty.call(LEGACY_SOUND_ENGINES, v) ? LEGACY_SOUND_ENGINES[v] : v;
+    return SOUND_ENGINES.some((x) => x.id === id) ? id : DEFAULT_SOUND_ENGINE;
+}
+const soundEngineOf = (id) => SOUND_ENGINES.find((x) => x.id === soundEngineId(id));
 
 const { DEVICE } = require('./route');
 
@@ -124,9 +133,9 @@ class Core {
         this.timer = setInterval(() => this.tick(), SEND_MS);
     }
 
-    soundEngine() { const e = this.settings.get('soundEngine'); return SOUND_ENGINES.some((x) => x.id === e) ? e : 'a'; }
+    soundEngine() { return soundEngineId(this.settings.get('soundEngine')); }
 
-    /** The preset's title / subtitle / redline as shown: the sound engine's own names where it has them (D). */
+    /** The preset's title / subtitle / redline as shown: the sound engine's own names where it has them (Bass). */
     presetInfo(k) {
         const p = PRESETS[k], own = soundEngineOf(this.soundEngine()).presets;
         return own && own[k] ? Object.assign({}, p, own[k], { red: null }) : p;
@@ -136,7 +145,7 @@ class Core {
         const p = this.preset();
         this.daemon.send('ENGINE ' + this.soundEngine());
         this.daemon.send('E ' + p);
-        // (D's presets are all turbo diesels)
+        // (the Bass engine's presets are all turbo diesels)
         const turbo = soundEngineOf(this.soundEngine()).realRpm || PRESETS[p].turbo;
         this.daemon.send('T ' + (turbo && this.settings.get('turbo') !== false ? 1 : 0));
         this.daemon.send('V ' + (clamp(Number(this.settings.get('volume')) || 60, 0, 100) / 100).toFixed(2));
@@ -202,4 +211,4 @@ class Core {
     }
 }
 
-module.exports = { Core, PRESETS, ORDER, SOUND_ENGINES, SOUND_SETTINGS, soundEngineOf };
+module.exports = { Core, PRESETS, ORDER, SOUND_ENGINES, SOUND_SETTINGS, DEFAULT_SOUND_ENGINE, LEGACY_SOUND_ENGINES, soundEngineId, soundEngineOf };

@@ -1,4 +1,4 @@
-/* presets.c - engine D's four calibrations (the ids the app sends stay i6 / v8 / v10 / v12).
+/* presets.c - the Bass engine's four calibrations (the ids the app sends stay i6 / v8 / v10 / v12).
  *
  * Order tables: gain in dB re the common reference amplitude at FULL positive load at the rpm knots
  * 800 / 1600 / 2800 / 4300 rpm (piecewise linear in dB between knots, clamped outside), and the off-gas offset

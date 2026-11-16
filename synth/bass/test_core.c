@@ -1,4 +1,4 @@
-/* test_core.c - internal checks of engine D: finite states and output bounds on extreme input, rpm response
+/* test_core.c - internal checks of the Bass engine: finite states and output bounds on extreme input, rpm response
  * (step and ramp), engine-off silence, and that X turbo / bov / pops = 0 really remove those layers. */
 #include "synth.h"
 #include <assert.h>

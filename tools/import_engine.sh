@@ -1,7 +1,9 @@
 #!/bin/sh
-# tools/import_engine.sh <id> <git ref> [<path>]: copy <path> (default synth) of an agent's branch into synth/<id>/ and wire it into this
-# layout: its car binary as tool/lfb-enginesound/es-synth-<id>, the shared loader / glibc check, the shared speaker
-# protection (tools/add_protect.py).
+# tools/import_engine.sh <id> <git ref> [<path>]: copy <path> (default synth) of a branch into synth/<id>/ and wire it
+# into this layout: its car binary as tool/lfb-enginesound/es-synth-<id>, the shared loader / glibc check
+# (tools/check_glibc.py), the shared speaker protection (tools/add_protect.py). <id>: a lower-case name (a-z, 0-9, _).
+# Then: its binary in tool/lfb-enginesound/component.json "files", its entry in SOUND_ENGINES (apps/lfb_enginesound/core.js)
+# and in the soundEngine setting (app.json).
 set -eu
 id=$1; ref=$2; src=${3:-synth}
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -22,11 +24,11 @@ OUT := ../../tool/lfb-enginesound/es-synth-$(ENGINE)
 car: build/es-synth
 \tcp build/es-synth $(OUT)
 \tfile $(OUT)
-\tpython3 check_glibc.py $(OUT)
+\tpython3 ../../tools/check_glibc.py $(OUT)
 ''', mk, count=1)
 open('Makefile', 'w').write(mk)
 PY
 sed -i.bak -e 's# protect\.h# ../common/protect.h#g' -e 's# -I\. -I\.\./common# -I../common#' Makefile && rm -f Makefile.bak
-cp ../../tools/check_glibc.py check_glibc.py
+rm -f check_glibc.py   # the shared one in tools/ is used
 python3 ../../tools/add_protect.py .
 make car

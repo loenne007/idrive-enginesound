@@ -3,18 +3,19 @@
  * esd.js - the Engine Sound service (runs on the head unit's own Node 8, /usr/bin/node).
  *
  * It owns the synthesizer process and a control socket for the app. Each sound engine is its own synthesizer binary
- * beside this file, es-synth-<engine> (synth/<engine>/ in the repository), all with the same command line and
- * control lines; the app picks one with ENGINE <engine>.
+ * beside this file, es-synth-<engine> (synth/<engine>/ in the repository: pulse, waveguide, bass), all with the same
+ * command line and control lines (synth/PROTOCOL.md); the app picks one with ENGINE <engine>.
  *
  *   /run/lfb-enginesound/ctl.sock   (0660, group tm_oap_app: the OAP apps' group)
  *
  * The app sends newline-terminated lines. Lines the service handles itself:
- *   ENGINE <engine>          the sound engine (es-synth-<engine>); the synth restarts with it
+ *   ENGINE <engine>          the sound engine (es-synth-<engine>; the ids before 1.0, a / b / c / d, are mapped);
+ *                            the synth restarts with it
  *   OUT <alsa device>|none   play into that ALSA device (the synth is started / restarted on it); none stops it
  *   TONE <alsa device>       routing test: 10 s of beeps into that device (the synth is paused meanwhile)
  *   STATUS                   one JSON status line back
  *   SHM                      the SmartX endpoints found in /dev/shm, as JSON
- * Every other line (P / E / T / V / M / S, see synth/README.md) goes to the synth's stdin as it is. The last
+ * Every other line (P / E / T / V / M / S, see synth/PROTOCOL.md) goes to the synth's stdin as it is. The last
  * E / T / V / M lines are replayed when the synth starts again, so a restart keeps the engine, turbo, volume and
  * mute state. Replies are single JSON lines starting with '{'.
  *
@@ -33,11 +34,14 @@ const SYNTH_DIR = process.env.ES_SYNTH_DIR || __dirname;
 function engines() {
     try { return fs.readdirSync(SYNTH_DIR).map((f) => /^es-synth-([a-z0-9_]+)$/.exec(f)).filter(Boolean).map((m) => m[1]).sort(); } catch (e) { return []; }
 }
-/** The chosen engine's binary, else the first one there. */
+const DEFAULT_ENGINE = 'pulse';
+// the sound engine ids before 1.0 (an app not yet updated may still send them)
+const LEGACY = { a: 'waveguide', b: 'pulse', c: 'pulse', d: 'bass' };
+/** The chosen engine's binary, else the default, else the first one there. */
 function synthPath() {
     if (process.env.ES_SYNTH) return process.env.ES_SYNTH;
     const all = engines();
-    const e = all.indexOf(state.engine) >= 0 ? state.engine : all[0];
+    const e = all.indexOf(state.engine) >= 0 ? state.engine : all.indexOf(DEFAULT_ENGINE) >= 0 ? DEFAULT_ENGINE : all[0];
     return path.join(SYNTH_DIR, 'es-synth-' + (e || 'missing'));
 }
 const SHM = process.env.ES_SHM || '/dev/shm';
@@ -113,6 +117,7 @@ function setDevice(dev) {
 }
 
 function setEngine(e) {
+    if (Object.prototype.hasOwnProperty.call(LEGACY, e)) e = LEGACY[e];
     if (!/^[a-z0-9_]+$/.test(e) || e === state.engine) return;
     state.engine = e;
     log('engine ' + e + (engines().indexOf(e) < 0 ? ' (not installed: ' + path.basename(synthPath()) + ')' : ''));

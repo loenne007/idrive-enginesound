@@ -1,11 +1,11 @@
 'use strict';
 // node test/core.test.js: the app's mapping and on / off logic (apps/lfb_enginesound/core.js) with a fake service.
 const assert = require('assert');
-const { Core, PRESETS } = require('../apps/lfb_enginesound/core');
+const { Core, PRESETS, SOUND_ENGINES, soundEngineId } = require('../apps/lfb_enginesound/core');
 const { DEVICE } = require('../apps/lfb_enginesound/route');
 
 function make(over) {
-    const vals = Object.assign({ enabled: true, engine: 'v8', soundEngine: 'a', volume: 60, mode: 'mix', sportOnly: false, rpmMap: 'scaled', realRedline: 4800, maxTorque: 400, turbo: true }, over || {});
+    const vals = Object.assign({ enabled: true, engine: 'v8', soundEngine: 'pulse', volume: 60, sportOnly: false, rpmMap: 'scaled', realRedline: 4800, maxTorque: 400, turbo: true }, over || {});
     const sent = [], routed = [];
     let t = 1000;
     const core = new Core({
@@ -33,14 +33,29 @@ function make(over) {
     const { core } = make({ rpmMap: 'real' });
     assert.strictEqual(core.virtualRpm(2345), 2345);
 }
-// engine D (Active Sound Design) gets the car's real rpm and shows its own preset names
+// the Bass engine (Active Sound Design) gets the car's real rpm and shows its own preset names
 {
-    const { core } = make({ soundEngine: 'd', engine: 'v10' });
+    const { core } = make({ soundEngine: 'bass', engine: 'v10' });
     assert.strictEqual(core.virtualRpm(2345), 2345);
     assert.strictEqual(core.presetInfo('v10').title, 'V6 TDI');
-    const a = make({ soundEngine: 'a', engine: 'v10' }).core;
-    assert.strictEqual(a.presetInfo('v10').title, 'V10');
-    assert(a.virtualRpm(2345) > 2345);
+    const w = make({ soundEngine: 'waveguide', engine: 'v10' }).core;
+    assert.strictEqual(w.presetInfo('v10').title, 'V10');
+    assert(w.virtualRpm(2345) > 2345);
+}
+// sound engines: three, Pulse the default; ids saved before 1.0 map to the new ones (app.json "aliases" agrees)
+{
+    assert.deepStrictEqual(SOUND_ENGINES.map((x) => x.id), ['pulse', 'waveguide', 'bass']);
+    const migrate = { a: 'waveguide', b: 'pulse', c: 'pulse', d: 'bass', pulse: 'pulse', waveguide: 'waveguide', bass: 'bass',
+        x: 'pulse', undefined: 'pulse', constructor: 'pulse' };
+    Object.keys(migrate).forEach((k) => assert.strictEqual(soundEngineId(k === 'undefined' ? undefined : k), migrate[k], k));
+    const spec = require('../apps/lfb_enginesound/app.json').settings.find((s) => s.key === 'soundEngine');
+    assert.strictEqual(spec.default, 'pulse');
+    assert.deepStrictEqual(spec.options.map((o) => o[0]), ['pulse', 'waveguide', 'bass']);
+    assert.deepStrictEqual(spec.aliases, { a: 'waveguide', b: 'pulse', c: 'pulse', d: 'bass' });
+    const old = make({ soundEngine: 'c' });
+    old.core.start();
+    assert(old.sent.indexOf('ENGINE pulse') >= 0, 'old c plays pulse');
+    assert.strictEqual(make({ soundEngine: 'd' }).core.virtualRpm(2345), 2345, 'old d is bass: real rpm');
 }
 // load: torque against the max, overrun negative
 {
@@ -55,7 +70,7 @@ function make(over) {
 {
     const { core, sent, routed, step } = make();
     core.start();
-    assert(sent.indexOf('ENGINE a') >= 0 && sent.indexOf('M 1') >= 0 && sent.indexOf('E v8') >= 0 && sent.indexOf('V 0.60') >= 0);
+    assert(sent.indexOf('ENGINE pulse') >= 0 && sent.indexOf('M 1') >= 0 && sent.indexOf('E v8') >= 0 && sent.indexOf('V 0.60') >= 0);
     core.tick();
     assert.strictEqual(core.reason, 'no engine data');
     core.feed({ rpm: 1500, speed: 30, gear: 2, torque: 120 });

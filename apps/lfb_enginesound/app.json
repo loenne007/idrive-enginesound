@@ -110,21 +110,27 @@
       "key": "soundEngine",
       "label": "Sound engine",
       "type": "choice",
-      "default": "a",
+      "default": "pulse",
       "options": [
         [
-          "a",
-          "A (Engine_Sim style, rewritten)"
+          "pulse",
+          "Pulse"
         ],
         [
-          "c",
-          "C (light and quick)"
+          "waveguide",
+          "Waveguide"
         ],
         [
-          "d",
-          "D (Active Sound Design, diesel)"
+          "bass",
+          "Bass (Active Sound)"
         ]
-      ]
+      ],
+      "aliases": {
+        "a": "waveguide",
+        "b": "pulse",
+        "c": "pulse",
+        "d": "bass"
+      }
     },
     {
       "key": "volume",

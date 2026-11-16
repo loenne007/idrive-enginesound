@@ -1,6 +1,6 @@
 # Sound engine protocol
 
-Every sound engine (`synth/<id>/`, binary `es-synth-<id>`) has the same command line (see `synth/a/README.md`:
+Every sound engine (`synth/<id>/`, binary `es-synth-<id>`) has the same command line (see `synth/waveguide/README.md`:
 `--out alsa:/wav:/raw`, `--demo`, `--script`, `--tone`, `--info`, `--bench`) and reads the same control lines on
 stdin, one per line, typically 20-100 a second. Malformed lines are ignored; nothing may block the audio.
 

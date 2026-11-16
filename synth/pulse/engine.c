@@ -1,4 +1,4 @@
-/* engine.c - one engine voice of sound engine C.
+/* engine.c - one engine voice of the Pulse sound engine.
  *
  * A pulse-and-pipe model, cheap enough to run at well over 100x realtime and with no state that lags the
  * telemetry:
@@ -15,7 +15,7 @@
  *      layer, a subtle turbo, a soft recirculation-valve whoosh, overrun pops through the same pipes
  *
  * Ideas and constants: the event source, pipe/muffler structure and airbox follow YigitSalihEmecen/Engine_Sim (MIT)
- * as engine A re-implements it; crank-angle pulse tables and valve-timed intake/exhaust events after the
+ * as the Waveguide engine re-implements it; crank-angle pulse tables and valve-timed intake/exhaust events after the
  * DasEtwas/enginesound and Antonio-R1 waveguide engines (MIT, Baldan et al. 2015); noise multiplied onto the
  * pressure signal after ange-yaghi/engine-sim (MIT). No code is copied from those three.
  *

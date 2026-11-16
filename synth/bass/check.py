@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Engine D regression checks, dependency-free (Python 3 standard library only).
+"""Bass engine regression checks, dependency-free (Python 3 standard library only).
 
 Samples: level, peaks, bass-band peak, infrasound, clicks, level through the demo's upshifts. Renders: every main
 order's frequency against the rpm (1 %), load -> level and brightness, off-gas against full load (7-10 dB), the X
@@ -82,7 +82,7 @@ def db(x): return 20 * math.log10(x + 1e-12)
 
 
 def clicks(a, what):
-    # a sample step far above the surrounding 10 ms waveform slope (A's detector)
+    # a sample step far above the surrounding 10 ms waveform slope (the Waveguide engine's detector)
     bad = 0
     worst = 0
     for i in range(480, len(a) - 480, 240):

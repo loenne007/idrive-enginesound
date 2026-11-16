@@ -1,4 +1,4 @@
-/* synth.c - engine D: active sound design for the car's own diesel.
+/* synth.c - the Bass sound engine: active sound design for the car's own diesel.
  *
  * Like the factory systems (BMW ASD, Audi sound actuator / active exhaust, Bose EHE, Harman ESS) it adds
  * rpm-locked ENGINE ORDERS to what the cabin already hears from the real engine:
@@ -301,7 +301,7 @@ static void control(Synth *s) {
     s->spool_t = sstep(.6f, .95f, load) * sstep(1600, 2600, rpm);
     s->spool += (s->spool_t - s->spool) * (s->spool_t > s->spool ? k_spool_up : k_spool_dn);
     s->boost_t = load > .8f && rpm > 1700 ? s->boost_t + dtc : fmaxf(0, s->boost_t - (load > .3f ? .5f : 2) * dtc);
-    /* turbo (T 1 + X turbo; off in D's own default): a faint tonal whistle at high boost only, no noise */
+    /* turbo (T 1 + X turbo; off in this engine's own default): a faint tonal whistle at high boost only, no noise */
     {
         float lvl = s->turbo ? s->x[X_TURBO] : 0;
         s->wh_lvl = REF * on * db2lin(turbo_db) * lvl * sstep(.55f, .95f, s->spool);

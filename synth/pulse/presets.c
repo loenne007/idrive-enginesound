@@ -5,7 +5,7 @@
  * 90/270/360/540: the uneven per-bank gaps, through pipes of different length, are the burble); S85 V10
  * 1-6-5-10-2-7-3-8-4-9 with alternating 90/54-degree intervals; V12 at even 60 degrees.
  * Pipe lengths, reflection, damping, muffler chambers and airbox start from YigitSalihEmecen/Engine_Sim
- * src/profiles.js (MIT) i6 / v8cross / v10 / v12, as engine A uses them. Idle and redline are the app's numbers
+ * src/profiles.js (MIT) i6 / v8cross / v10 / v12, as the Waveguide engine uses them. Idle and redline are the app's numbers
  * and must not change.
  */
 #include "synth.h"
