@@ -8,7 +8,7 @@
  *   - what keeps it from sounding like an organ: per-firing amplitude irregularity (bank / cylinder trims plus a
  *     random draw per firing event), a slow random "lump" on the half orders (the V6 burble), a small common
  *     phase jitter, and band-passed noise riding on the firing pulses, brighter and sharper under load
- *   - cabin chain: 28 Hz high-pass, bass shelf (X bass), a load-dependent cabin low-pass
+ *   - cabin chain: 34 Hz 4th-order high-pass, bass shelf (X bass), a load-dependent cabin low-pass
  *   - subtle turbo whistle / hiss, a soft recirculation sigh on a lift after boost, and gentle overrun burble /
  *     crackle after a genuine lift-off (X turbo / bov / pops)
  * Gear changes (S) trigger nothing: the sound follows the telemetry rpm, which is what the car's ZF does.
@@ -18,9 +18,9 @@
 #include <string.h>
 
 #define REF .05f      /* linear amplitude of a 0 dB order before the output gain */
-#define OUT_GAIN 4.55f /* calibration: demo RMS about -19 dBFS */
-#define FLOOR_LO 30.f /* orders fade out below FLOOR_HI .. FLOOR_LO Hz (no infrasound) */
-#define FLOOR_HI 40.f
+#define OUT_GAIN 4.15f /* calibration: demo bass peaks about -10 dBFS, 3 s RMS under -15 dBFS */
+#define FLOOR_LO 32.f /* orders fade out below FLOOR_HI .. FLOOR_LO Hz (no infrasound) */
+#define FLOOR_HI 42.f
 /* layer mask for measurements (cc -DES_LAYERS=...): 1 pulse noise, 2 turbo, 4 sigh, 8 pops, 16 phase jitter, 32 orders */
 #ifndef ES_LAYERS
 #define ES_LAYERS 63
@@ -32,7 +32,7 @@ static const char *const XNAME[NX] = {"offgas", "turbo", "bov", "pops", "bass"};
 static const float KNOT[NK] = {800, 1600, 2800, 4300};
 /* level against rpm, both load ends: the low band (under ~100 Hz up to ~2000 rpm) is held back for the speaker
  * protection's bass limit, the sound grows towards the top like a factory ASD */
-static const float RPM_TRIM[NK] = {-1, -1.2f, .8f, 5};
+static const float RPM_TRIM[NK] = {0, 0, 1, 2.5f};
 static const float CYL[8] = {.7f, -.4f, .2f, -.9f, .5f, -.2f, .6f, -.5f};
 static const int BANK8[8] = {1, -1, 1, -1, -1, 1, -1, 1};
 
@@ -94,14 +94,16 @@ void synth_init(Synth *s, int p, float vol) {
     s->f6.slot = s->f8.slot = -1;
     s->w8 = presets[p].n == 8;
     s->wob = 0;
-    bq_highpass(&s->hp, 28, .707f);
+    /* 4th-order Butterworth high-pass at 34 Hz: also the 20 Hz sidebands of the per-firing modulation at idle */
+    bq_highpass(&s->hp, 34, .5412f);
+    bq_highpass(&s->hp2, 34, 1.3066f);
     s->shelf_db = -99;
     s->cab_fc = -1;
     bq_bandpass(&s->tex_bp, 400, .8f);
-    bq_lowpass(&s->tex_lp, 450, .7f);
+    bq_lowpass(&s->tex_lp, 200, .7f);
     bq_bandpass(&s->bov_bp, 1100, 1.2f);
     bq_lowpass(&s->bov_lp, 1200, .7f);
-    bq_lowpass(&s->pop_lp, 700, .7f);
+    bq_lowpass(&s->pop_lp, 300, .7f);
     s->pop_res_f = 120;
     s->pop_gap = 1;
 }
@@ -187,7 +189,7 @@ static int firing(Synth *s, Firing *f, float pos, const int *bank, float bank_tr
 
 static void control(Synth *s) {
     const float dtc = (float)CTRL / SR;
-    float rpm, load, w, ov, odb, ofull, cruise, on, wsum = 0, fr, x;
+    float rpm, load, w, ov, odb, ofull, fc_ord, cruise, on, wsum = 0, fr, x;
     float tex_db = 0, lp_lo = 0, lp_hi = 0, bass_db = 0, pops = 0, turbo_db = 0, bov_db = 0, wobble = 0;
     int i, k, idx;
     /* smoothing of the settings and the crossfade weights */
@@ -263,9 +265,13 @@ static void control(Synth *s) {
         bov_db += wi * p->bov_db;
         wobble += wi * p->wobble;
     }
-    /* no infrasound: an order fades out between 40 and 30 Hz; engine off (rpm < 300-600): silence */
+    /* D is a bass enhancer: every order is weighted by a 3rd-order low-pass magnitude at the preset's corner
+     * (about 140 Hz off the gas, 185-200 Hz under load), so the energy sits at 30-150 Hz with a little up to
+     * ~250 Hz; no infrasound: an order fades out between 42 and 32 Hz; engine off (rpm < 300-600): silence */
+    fc_ord = lp_lo + (lp_hi - lp_lo) * w;
     for (k = 1; k <= NH; k++) {
-        float f = k * rpm * (1.f / 120), tgt = s->gt[k - 1] * REF * on * sstep(FLOOR_LO, FLOOR_HI, f), g = s->g[k - 1];
+        float f = k * rpm * (1.f / 120), r = f / fc_ord, roll = 1 / sqrtf(1 + r * r * r * r * r * r),
+              tgt = s->gt[k - 1] * REF * on * roll * sstep(FLOOR_LO, FLOOR_HI, f), g = s->g[k - 1];
         s->gt[k - 1] = g + (tgt - g) * (tgt > g ? k_att : k_rel); /* the value reached at the end of this tick */
     }
     /* slow random lump of the half orders: two 4 Hz one-poles on a Gaussian, normalised to about unit variance */
@@ -278,10 +284,10 @@ static void control(Synth *s) {
     x = tex_db + 4 * clampf((rpm - 800) / 3500, 0, 1);
     s->tex_lvl_t = REF * on * db2lin(x) * sstep(.35f, .9f, load);
     s->tex_sharp = w;
-    bq_bandpass(&s->tex_bp, 150 + 200 * w + .03f * rpm, .7f);
+    bq_bandpass(&s->tex_bp, 80 + 80 * w + .02f * rpm, .7f);
     /* cabin low-pass: muffled off the gas, opening under load; bass shelf: preset + X bass (about +-9 dB) */
     {
-        float fc = clampf(lp_lo + (lp_hi - lp_lo) * w, 200, 900), db = bass_db + 9 * (s->x[X_BASS] - 1);
+        float fc = clampf(2.2f * fc_ord, 250, 500), db = bass_db + 9 * (s->x[X_BASS] - 1);
         if (fabsf(fc - s->cab_fc) > .002f * fc) {
             bq_lowpass(&s->cab[0], fc, .62f);
             s->cab_fc = fc;
@@ -425,7 +431,7 @@ void synth_render(Synth *s, int16_t *out, unsigned frames) {
             y += tex;
         }
         /* cabin: high-pass, bass shelf, low-pass */
-        y = bq(&s->cab[0], bq(&s->shelf, bq(&s->hp, y)));
+        y = bq(&s->cab[0], bq(&s->shelf, bq(&s->hp2, bq(&s->hp, y))));
         /* turbo whistle: a quiet sine, its pitch with the boost, a slow wander; faded in and out by wh_g */
         s->wh_g += (s->wh_lvl - s->wh_g) * .0005f;
         if (s->wh_g > 1e-7f) {

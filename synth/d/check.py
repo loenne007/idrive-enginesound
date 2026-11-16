@@ -12,7 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parent
 BIN = ROOT / 'build/es-synth-host'
 SR = 48000
 # the main orders of each preset (checked for frequency against rpm)
-MAIN = {'i6': (3, 6, 9), 'v8': (2, 4, 8), 'v10': (1.5, 3, 4.5, 7.5), 'v12': (1.5, 3, 4.5, 7.5)}
+MAIN = {'i6': (1.5, 3, 6), 'v8': (3, 4, 6), 'v10': (1.5, 3, 4.5), 'v12': (1.5, 3, 4.5)}
 
 
 def read(path):
@@ -146,15 +146,26 @@ for name in ids:
     peak = max(map(abs, a))
     rms = level(a)
     assert peak <= 10 ** (-3 / 20), (name, 'peak', db(peak))
-    assert -21 <= db(rms) <= -17, (name, 'demo RMS', db(rms))
+    assert -21 <= db(rms) <= -16.5, (name, 'demo RMS', db(rms))
+    # D is a bass enhancer that stays inside the speaker protection without leaning on it: the band under 100 Hz
+    # (the protection's detector) peaks at -11..-9 dBFS (limit -8), the 3 s RMS stays under -15 dBFS (limit -14)
     bp = bass_peak(a)
-    assert db(bp) <= -8.5, (name, 'bass band peak over the protection limit', db(bp))
-    # infrasound: energy under 28 Hz against the total, three windows (idle, pull, coast)
-    sub = 0
-    for t in (1, 9, 14):
+    assert -11.5 <= db(bp) <= -9, (name, 'bass band peak: headroom under the protection limit', db(bp))
+    cs = [0.]
+    for x in a: cs.append(cs[-1] + x * x)
+    rms3 = max(cs[i + 3 * SR] - cs[i] for i in range(0, len(a) - 3 * SR, 4800)) / (3 * SR)
+    assert db(math.sqrt(rms3)) <= -15, (name, '3 s RMS reaches the power limiter', db(math.sqrt(rms3)))
+    # energy split over the drive (13 windows of 0.68 s): mostly 30-250 Hz, nothing under 30 Hz, almost nothing
+    # above 250 Hz
+    band = [0.] * 5
+    for t in range(1, 39, 3):
         s = spectrum(a, t)
-        sub = max(sub, energy(s, 1, 28) / energy(s, 1, 20000))
-    assert sub < 10 ** (-3.5), (name, 'infrasound', 10 * math.log10(sub))
+        for j, (lo, hi) in enumerate(((1, 30), (30, 60), (60, 120), (120, 250), (250, 20000))):
+            band[j] += energy(s, lo, hi)
+    tot = sum(band)
+    band = [100 * b / tot for b in band]
+    assert band[0] < .03 and band[4] < 1.5 and band[1] + band[2] > 60, (name, 'band split', band)
+    sub = band[0] / 100
     ratio = clicks(a, name)
     # demo upshifts (rpm falls ~1200-1450 over 350 ms): no gap or onset beyond the settled levels around them
     for ts in (4.6, 7.4, 10.6, 21.5, 29.5):
@@ -165,7 +176,18 @@ for name in ids:
         w = e[k(-.05):k(.5)]
         assert min(w) >= min(pre, post) - 3 and max(w) <= max(pre, post) + 3, (name, ts, 'shift gap/onset')
     print(f'{name}: demo RMS {db(rms):.1f} dBFS, peak {db(peak):.1f} dBFS, <100 Hz peak {db(bp):.1f} dBFS, '
-          f'<28 Hz {10 * math.log10(sub + 1e-15):.0f} dB, slope ratio {ratio:.1f}')
+          f'3 s RMS max {db(math.sqrt(rms3)):.1f} dBFS, <30 Hz {10 * math.log10(sub + 1e-15):.0f} dB, energy '
+          f'30-60/60-120/120-250/>250 Hz ' + '/'.join(f'{b:.1f}' for b in band[1:]) + f' %, slope ratio {ratio:.1f}')
+
+# ---- idle 800 rpm: order 1.5 is 20 Hz, order 1 13 Hz: nothing under 30 Hz; X bass 2 against the protection ----
+for name in ids:
+    s = spectrum(render(name, 'idle', steady(800, .05, 0, 1, 4, 0)), 2)
+    sub = 10 * math.log10(energy(s, 1, 30) / energy(s, 1, 20000))
+    assert sub < -40, (name, 'idle: content under 30 Hz', sub)
+    b2 = bass_peak(render(name, 'bass2', ['0 X bass 2'] + steady(2000, 1, 1, 4, 4, 60)))
+    b1 = bass_peak(render(name, 'bass1', steady(2000, 1, 1, 4, 4, 60)))
+    print(f'{name}: idle under 30 Hz {sub:.0f} dB; 2000 rpm full load <100 Hz peak {db(b1):.1f} dBFS, with X bass 2 '
+          f'{db(b2):.1f} dBFS (protection limit -8: {"limiting" if db(b2) > -8.6 else "not reached"})')
 
 # ---- orders track the rpm, load, off-gas ----
 for name in ids:
@@ -184,16 +206,16 @@ for name in ids:
     for load in (1, .5, .05, 0, -.5):
         a = render(name, f'load{load}', steady(2500, load, max(load, 0)))[SR:]
         lv[load] = db(level(a))
-        s = spectrum(a, 1)
-        br[load] = energy(s, 350, 3000) / energy(s, 30, 3000)
+        ss = [spectrum(a, t) for t in (.2, .9, 1.6, 2.2)]
+        br[load] = sum(energy(s, 120, 400) for s in ss) / sum(energy(s, 30, 400) for s in ss)
     assert lv[1] > lv[.5] > lv[.05], (name, 'level does not rise with load', lv)
-    assert br[1] > br[.05] * 1.3, (name, 'no brightness increase', br)
+    assert br[1] > br[.05] * 1.1, (name, 'no brightness increase', br)  # mild: D stays a bass layer
     for off in (0, -.5):
         assert 3 <= lv[1] - lv[off] <= 5, (name, 'off-gas level', off, lv[1] - lv[off])
     print(f'{name}: orders {MAIN[name]} at 1500/2600/4000 rpm, worst frequency error {100 * max(errs):.3f} %; '
           f'2500 rpm level load 1/.5/.05/0/-0.5: ' + '/'.join(f'{lv[k]:.1f}' for k in (1, .5, .05, 0, -.5)) +
           f' dBFS (off-gas {lv[1] - lv[0]:.1f} / coast {lv[1] - lv[-.5]:.1f} dB under full load), '
-          f'350 Hz+ share {100 * br[.05]:.1f} -> {100 * br[1]:.1f} %')
+          f'120-400 Hz share {100 * br[.05]:.1f} -> {100 * br[1]:.1f} %')
 
 # ---- X settings ----
 def lift_drive(xs, turbo=False):
@@ -249,8 +271,8 @@ for name in ('v10', 'i6'):
     lo = {}
     for bass in (0, 1, 2):
         s = spectrum(render(name, f'x-bass{bass}', [f'0 X bass {bass}'] + steady(2000, .5, .5)), 2)
-        lo[bass] = 10 * math.log10(energy(s, 30, 150) / energy(s, 300, 1000))
-    assert lo[2] - lo[1] > 5 and lo[1] - lo[0] > 5, (name, 'bass', lo)
+        lo[bass] = 10 * math.log10(energy(s, 30, 80) / energy(s, 150, 400))
+    assert lo[2] - lo[1] > 3 and lo[1] - lo[0] > 3, (name, 'bass', lo)
     og = {}
     for v in (.5, 1, 2):
         og[v] = (db(level(render(name, f'x-off{v}', [f'0 X offgas {v}'] + steady(2500, 0, 0))[SR:])),
@@ -281,8 +303,8 @@ for name in ids:
     assert drop100 <= 2, (name, 'lift-off drops too fast', drop100)
     assert 3 <= before - after <= 5, (name, 'lift-off end level', before - after)
     assert tip <= .1, (name, 'tip-in too slow', tip)  # incl. the 45 ms envelope window
-    print(f'{name}: lift-off glide -{drop100:.1f} dB after 100 ms, -{drop300:.1f} dB after 300 ms, settles '
-          f'-{before - after:.1f} dB; tip-in within 1.5 dB after {1000 * tip:.0f} ms')
+    print(f'{name}: lift-off glide {-drop100:+.1f} dB after 100 ms, {-drop300:+.1f} dB after 300 ms, settles '
+          f'{after - before:+.1f} dB; tip-in within 1.5 dB after {1000 * tip:.0f} ms')
 
 # ---- transitions: preset switching, mute, X changes, shifts, malformed lines, stale watchdog, quit ----
 lines = []

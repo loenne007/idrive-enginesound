@@ -32,7 +32,7 @@ typedef struct {
     float ov_int, ov_half;  /* dB added on the overrun to integer / half orders */
     float off_trim;         /* dB added to every off-gas offset (sets off-gas against full load) */
     float tex_db;           /* filtered noise riding on the firing pulses, dB re reference at full load */
-    float lp_lo, lp_hi;     /* cabin low-pass corner at zero / full load, Hz */
+    float lp_lo, lp_hi;     /* order roll-off corner (3rd order) at zero / full load, Hz; cabin LP at 2.2x */
     float bass_db;          /* the preset's own bass shelf at bass = 1 */
     float pops;             /* overrun burble / crackle scale at pops = 1 */
     float turbo_db, bov_db; /* whistle / recirculation sigh level at X = 1, dB re reference */
@@ -80,7 +80,7 @@ typedef struct {
     Biquad tex_bp, tex_lp;
     float tex_lvl, tex_lvl_t, tex_sharp;
     /* master */
-    Biquad hp, shelf, cab[2];
+    Biquad hp, hp2, shelf, cab[2];
     float shelf_db, cab_fc, out_gain, out_gain_t;
     /* turbo */
     float spool, spool_t;

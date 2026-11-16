@@ -26,7 +26,7 @@ const SOUND_ENGINES = [
     { id: 'c', title: 'C', sub: 'light and quick' },
     // D emulates factory Active Sound Design: it enriches the car's own diesel, so it gets the REAL rpm, and its four
     // presets are diesel characters (shown with these names)
-    { id: 'd', title: 'D', sub: 'Active Sound Design (diesel)', realRpm: true, presets: {
+    { id: 'd', title: 'D', sub: 'bass for the diesel (Active Sound Design)', realRpm: true, presets: {
         i6: { title: 'Straight-6 diesel', sub: 'BMW B57, X7 40d style' },
         v8: { title: 'V8 TDI', sub: 'Audi SQ7 style' },
         v10: { title: 'V6 TDI', sub: 'Audi S6 / S7 style burble' },
