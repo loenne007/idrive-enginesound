@@ -31,10 +31,6 @@
       "statusActualValueTorque2": "rs",
       "statusFESVehicleDynamicSwitchHMI": "rs"
     },
-    "de.bmw.infrastructure.VehicleCondition": {
-      "_optional": "the car's state",
-      "VehicleCondition": "s"
-    },
     "org.genivi.am.commandinterface.CommandControl": {
       "_instances": "1",
       "_methods": [

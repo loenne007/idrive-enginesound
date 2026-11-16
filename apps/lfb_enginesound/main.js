@@ -80,7 +80,7 @@ async function background(bg) {
     };
 
     const fesSeen = [];
-    const car = new Car(bg, ['rpm', 'speed', 'gear', 'condition'], {
+    const car = new Car(bg, ['rpm', 'speed', 'gear'], {
         [FES]: {
             statusActualValueTorque2: (v) => core.feed({ torque: torqueOf(v && v.actualValueTorqueCrankshaft) }),
             statusFESVehicleDynamicSwitchHMI: (v) => {
@@ -92,7 +92,7 @@ async function background(bg) {
         },
     });
     car.setRedline(4800);
-    car.onSample((d) => core.feed({ rpm: d.rpm, speed: d.speed, gear: d.gear, condition: d.condition, demo: d.demo,
+    car.onSample((d) => core.feed({ rpm: d.rpm, speed: d.speed, gear: d.gear, demo: d.demo,
         torque: d.demo && typeof d.torque === 'number' ? d.torque : undefined }));
     settings.onChange((key) => core.onSetting(key));
     core.start();

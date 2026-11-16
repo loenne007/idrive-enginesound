@@ -69,7 +69,7 @@ class Core {
         this.settings = opts.settings; this.log = opts.log; this.daemon = opts.daemon; this.route = opts.route;
         this.mixChoice = opts.mixChoice || null;     // the mix route chosen on the Audio page (null: the default)
         this.now = opts.now || Date.now;
-        this.d = { rpm: null, rpmT: 0, speed: null, gear: undefined, torque: null, mode: null, condition: undefined, demo: false };
+        this.d = { rpm: null, rpmT: 0, speed: null, gear: undefined, torque: null, mode: null, demo: false };
         this.idle = 800;          // the car's idle, learned at a standstill
         this.out = { rpm: 0, load: 0, throttle: 0, gear: 0 };
         this.playing = false; this.reason = 'starting'; this.mutedAt = this.now(); this.routed = false; this.lastGear = undefined;
@@ -89,7 +89,6 @@ class Core {
         if (num(d.speed)) this.d.speed = d.speed;
         if (d.torque !== undefined) this.d.torque = num(d.torque) ? d.torque : null;
         if (d.mode !== undefined) this.d.mode = d.mode;
-        if (d.condition !== undefined) this.d.condition = d.condition;
         if (d.demo !== undefined) this.d.demo = d.demo;
         if (d.gear !== undefined && d.gear !== null) {
             const g = d.gear;
