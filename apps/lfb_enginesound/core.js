@@ -9,6 +9,7 @@
  *
  * It plays while: switched on, the engine runs, and (setting sportOnly) the driving mode is Sport. Otherwise the
  * synth is muted (it fades) and, after a few seconds, the audio route is released so the car's own source returns.
+ * The route is the CarLifeMedia source on the main speakers (route.js): it replaces the music while it plays.
  */
 const PRESETS = {
     i6: { title: 'Inline-6', sub: '3.0 turbo, B58 / S58 style', idle: 700, red: 7000, turbo: true },
@@ -18,13 +19,7 @@ const PRESETS = {
 };
 const ORDER = ['i6', 'v8', 'v10', 'v12'];
 
-/* The default routes. mix: BMW's OAP overlay source, which the AudioManager mixes over the playing source (the way
- * a navigation prompt is) - to be confirmed on the car with the Audio page. exclusive: CarLifeMedia (China-only, free
- * elsewhere), the route Moonride uses on iDrive 7: it replaces the playing source while connected. */
-const DEFAULT_ROUTES = {
-    mix: { source: 1048, sink: 1024, device: 'plug:smartx:OAPGenericOverlay_CF_48_STEREO', name: 'OAPGenericOverlay' },
-    exclusive: { source: 287, sink: 1024, device: 'plug:smartx:CarLifeMedia_CF_48_STEREO', name: 'CarLifeMedia', markAvailable: true },
-};
+const { DEVICE } = require('./route');
 
 const ENGINE_RUNS = 400;      // rpm: below = engine off
 const RELEASE_MS = 4000;      // muted this long: the audio route goes back to the car
@@ -34,15 +29,15 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const num = (x) => typeof x === 'number' && isFinite(x);
 
 class Core {
-    /** opts = { settings, log, daemon, route, routes() -> { mix, exclusive }, now() } */
+    /** opts = { settings, log, daemon, route, now() } */
     constructor(opts) {
         this.settings = opts.settings; this.log = opts.log; this.daemon = opts.daemon; this.route = opts.route;
-        this.routes = opts.routes || (() => DEFAULT_ROUTES);
         this.now = opts.now || Date.now;
         this.d = { rpm: null, rpmT: 0, speed: null, gear: undefined, torque: null, mode: null, condition: undefined, demo: false };
         this.idle = 800;          // the car's idle, learned at a standstill
         this.out = { rpm: 0, load: 0, throttle: 0, gear: 0 };
-        this.playing = false; this.reason = 'starting'; this.mutedAt = this.now(); this.routeWant = null; this.lastGear = undefined;
+        this.playing = false; this.reason = 'starting'; this.mutedAt = this.now(); this.routed = false; this.lastGear = undefined;
+        this.testUntil = 0;
         this.timer = null;
     }
 
@@ -110,12 +105,12 @@ class Core {
 
     onSetting(key) {
         if (key === 'engine' || key === 'turbo' || key === 'volume') this._applySettings();
-        if (key === 'mode' && this.playing) { this.routeWant = null; this._route(true); }
     }
 
     tick() {
-        const why = this.why();
         const t = this.now();
+        if (t < this.testUntil) return;                 // the test tone owns the route
+        const why = this.why();
         if (why !== this.reason) { this.log.info('sound: ' + (why || 'playing')); this.reason = why; }
         if (!why) {
             if (!this.playing) { this.playing = true; this._route(true); this.daemon.send('M 0'); }
@@ -126,24 +121,35 @@ class Core {
             this.daemon.send('P ' + rpm.toFixed(1) + ' ' + load.toFixed(3) + ' ' + thr.toFixed(3) + ' ' + this.out.gear + ' ' + (num(this.d.speed) ? this.d.speed.toFixed(1) : '0'));
         } else {
             if (this.playing) { this.playing = false; this.mutedAt = t; this.daemon.send('M 1'); }
-            if (this.routeWant && t - this.mutedAt > RELEASE_MS) this._route(false);
+            if (this.routed && t - this.mutedAt > RELEASE_MS) this._route(false);
         }
     }
 
     _route(on) {
-        if (!on) {
-            this.routeWant = null;
+        if (on === this.routed) return;
+        this.routed = on;
+        if (on) {
+            this.daemon.send('OUT ' + DEVICE);
+            if (this.route) this.route.connect().then((ok) => { if (!ok) this.log.warn('sound: audio route failed: ' + this.route.error); });
+        } else {
             this.daemon.send('OUT none');
             if (this.route) this.route.disconnect();
-            return;
         }
-        const mode = this.settings.get('mode') === 'exclusive' ? 'exclusive' : 'mix';
-        const r = this.routes()[mode] || DEFAULT_ROUTES[mode];
-        if (this.routeWant && this.routeWant.device === r.device && this.routeWant.source === r.source) return;
-        this.routeWant = r;
-        this.daemon.send('OUT ' + r.device);
-        if (this.route) this.route.connect(r).then((ok) => { if (!ok) this.log.warn('sound: route ' + r.name + ' failed: ' + this.route.error); });
+    }
+
+    /** Test: 10 s of beeps through the same route (also with the engine off). */
+    test() {
+        const t = this.now();
+        if (t < this.testUntil) return;
+        this.testUntil = t + 11000;
+        this.log.info('sound: test tone');
+        this.daemon.send('M 1');
+        this.daemon.send('OUT ' + DEVICE);
+        const go = () => this.daemon.send('TONE ' + DEVICE);
+        if (this.route) { this.routed = true; this.route.connect().then(go); } else go();
+        // afterwards: tick() decides again (playing or releasing the route)
+        setTimeout(() => { this.playing = false; this.mutedAt = this.now() - RELEASE_MS; this.reason = 'after test'; }, 11000);
     }
 }
 
-module.exports = { Core, PRESETS, ORDER, DEFAULT_ROUTES };
+module.exports = { Core, PRESETS, ORDER };

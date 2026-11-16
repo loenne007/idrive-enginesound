@@ -2,6 +2,7 @@
 // node test/core.test.js: the app's mapping and on / off logic (apps/lfb_enginesound/core.js) with a fake service.
 const assert = require('assert');
 const { Core, PRESETS } = require('../apps/lfb_enginesound/core');
+const { DEVICE } = require('../apps/lfb_enginesound/route');
 
 function make(over) {
     const vals = Object.assign({ enabled: true, engine: 'v8', volume: 60, mode: 'mix', sportOnly: false, rpmMap: 'scaled', realRedline: 4800, maxTorque: 400, turbo: true }, over || {});
@@ -11,7 +12,7 @@ function make(over) {
         settings: { get: (k) => vals[k] },
         log: { info() {}, warn() {} },
         daemon: { send: (l) => sent.push(l) },
-        route: { connect: (r) => { routed.push(['connect', r.source]); return Promise.resolve(true); }, disconnect: () => { routed.push(['disconnect']); return Promise.resolve(); }, error: null },
+        route: { connect: () => { routed.push(['connect']); return Promise.resolve(true); }, disconnect: () => { routed.push(['disconnect']); return Promise.resolve(); }, error: null },
         now: () => t,
     });
     return { core, sent, routed, vals, step: (ms) => { t += ms; } };
@@ -52,8 +53,8 @@ function make(over) {
     core.tick();
     assert.strictEqual(core.reason, null);
     assert(sent.indexOf('M 0') >= 0, 'unmuted');
-    assert(sent.some((l) => /^OUT plug:smartx:OAPGenericOverlay/.test(l)), 'mix device');
-    assert.deepStrictEqual(routed[0], ['connect', 1048]);
+    assert(sent.indexOf('OUT ' + DEVICE) >= 0, 'device');
+    assert.deepStrictEqual(routed[0], ['connect']);
     const p = sent.filter((l) => l[0] === 'P').pop().split(' ');
     assert.strictEqual(p[4], '2');
     assert(Math.abs(Number(p[2]) - 0.3) < 1e-6, 'load');
@@ -76,15 +77,24 @@ function make(over) {
     core.tick(); assert.strictEqual(core.reason, null);
     step(2000); core.tick(); assert.strictEqual(core.reason, 'no engine data');
 }
-// sport only, exclusive route
+// sport only
 {
-    const { core, sent, routed } = make({ sportOnly: true, mode: 'exclusive' });
+    const { core, routed } = make({ sportOnly: true });
     core.feed({ rpm: 2000, speed: 10, mode: 'other' });
     core.tick(); assert.strictEqual(core.reason, 'waiting for Sport mode');
+    assert.strictEqual(routed.length, 0);
     core.feed({ mode: 'sport' });
     core.tick(); assert.strictEqual(core.reason, null);
-    assert.deepStrictEqual(routed[0], ['connect', 287]);
-    assert(sent.some((l) => /CarLifeMedia/.test(l)));
+    assert.deepStrictEqual(routed[0], ['connect']);
+}
+// the test tone: route + TONE, then released with the engine off
+{
+    const { core, sent, routed } = make();
+    core.test();
+    assert.deepStrictEqual(routed[0], ['connect']);
+    assert(sent.indexOf('OUT ' + DEVICE) >= 0);
+    // TONE goes once the route is connected (a promise later)
+    setImmediate(() => { assert(sent.indexOf('TONE ' + DEVICE) >= 0, 'tone after connect'); console.log('core.test.js: ok'); process.exit(0); });
 }
 // idle learning moves towards the car's idle
 {
@@ -92,5 +102,3 @@ function make(over) {
     for (let i = 0; i < 500; i++) core.feed({ rpm: 760, speed: 0, torque: 20 });
     assert(Math.abs(core.idle - 760) < 5, 'idle ' + core.idle);
 }
-console.log('core.test.js: ok');
-process.exit(0);   // (core.start's 50 Hz timer)

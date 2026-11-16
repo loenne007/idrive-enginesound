@@ -48,3 +48,4 @@ kit/tools/.font-cache/
 egs-snapshot*.json
 synth/build/
 .DS_Store
+.claude/

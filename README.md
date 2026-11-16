@@ -25,7 +25,7 @@ Developed for a G20 320d.
  car (SOME/IP)                     app lfb_enginesound (Node 8, autostart)            service lfb-enginesound
  rpm, gear, torque, speed,  ──▶   maps the car's rpm onto the engine's rev range,  ──▶  esd.js ──▶ es-synth (C)
  driving mode                      load from torque, on/off logic, audio routing         Unix socket    │
-                                   (GENIVI AudioManager: source → speakers)                             ▼
+                                   (GENIVI AudioManager: CarLifeMedia → speakers)                             ▼
                                                                                     ALSA → SmartX → car speakers
 ```
 
@@ -35,15 +35,14 @@ Developed for a G20 320d.
   makes it louder and harder-edged; negative torque (engine braking) gives the overrun burble.
 - **gear**: a gear change (ZF 8HP) gives the short torque dip and the downshift character.
 
-## Audio: Mix or Exclusive
+## Audio
 
-- **Mix** (default): the engine plays on the AudioManager's `OAPGenericOverlay` source, which is meant to mix over
-  the music the way a navigation prompt does. **Not yet confirmed on a car.**
-- **Exclusive**: the engine is its own source (`CarLifeMedia`, the route Moonride uses on iDrive 7). It works, but the
-  music pauses while the engine sound plays.
+The engine plays as its own source on the main speakers: the AudioManager source `CarLifeMedia` (China-only, free
+elsewhere), the route Moonride uses on iDrive 7. The music pauses while the engine sound plays and comes back a few
+seconds after it stops (engine off, switched off, or not in Sport with *Only in Sport mode*). Mixing over the music
+(as a navigation prompt does) is not supported yet.
 
-The app's **Audio** page lists the SmartX endpoints and the AudioManager's sources. Each candidate route has a
-**Test** button that plays beeps into it for 10 s. If you hear them, **Use mix** / **Use excl.** saves that route.
+**Test sound** plays 10 s of beeps through the same route, also with the engine off.
 
 ## Settings
 
@@ -52,7 +51,6 @@ The app's **Audio** page lists the SmartX endpoints and the AudioManager's sourc
 | Engine sound | on / off (also the **On / Off** button) |
 | Engine | inline-6, V8, V10, V12 (also **Next engine**) |
 | Volume | 10–100 % of the synth's level (the car's own volume knob applies on top) |
-| Audio | Mix over the music / Exclusive |
 | Only in Sport mode | plays only while the driving mode is Sport |
 | Turbo sound | the inline-6's and V8's turbo whine and blow-off |
 | Rev range, Car's max rpm, Car's max torque | the mapping above |
