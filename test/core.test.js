@@ -185,42 +185,61 @@ function make(over) {
 }
 
 /* ---------------- audio routes ---------------- */
-const ENDPOINTS = ['CarLifeMedia_CF_48_STEREO', 'OAPGenericOverlay_CF_48_STEREO', 'OAPGenericInterrupt_CF_48_MONO', 'oapgenericinterrupt_CF_48_STEREO',
-    'NaviAnnouncement_CF_16_MONO', 'CarPlayMedia_CF_48_STEREO', 'Navi_CF_48_STEREO'];
-const SOURCES = [{ id: 287, name: 'CarLifeMedia' }, { id: 266, name: 'CarPlayMedia' }, { id: 1046, name: 'OAPGenericMedia' },
-    { id: 1047, name: 'OAPGenericInterrupt' }, { id: 1048, name: 'OAPGenericOverlay' }, { id: 1049, name: 'DynamicMedia' },
-    { id: 30, name: 'NaviAnnouncement' }, { id: 31, name: 'TTS' }, { id: 32, name: 'Navi' }];
-// the SmartX endpoint of a source: its name's prefix, case-insensitive, 48 kHz stereo preferred
+// the SmartX playback endpoints and the AudioManager's sources of a G20 head unit (its audio report, 2026-11)
+const ENDPOINTS = ['AndroidAutoGuidance_CF_24_MONO', 'AndroidAutoMedia_CF_48_STEREO', 'CarLifeMedia_CF_48_STEREO', 'CarLifeNavigation_CF_24_MONO',
+    'CarLifeSpeech_CF_24_MONO', 'CarPlayMain_CF_48_STEREO', 'CarPlayMain_Mono_CF_24_MONO', 'Media_Overlay_Converter_Source_CF_24_MONO',
+    'Nuance_Navi_physical_Source_CF_24_MONO', 'TencentOverlay_CF_24_MONO', 'TencentSpeech_CF_24_MONO', 'TencentTTS_CF_24_MONO'];
+const SOURCES = [{ id: 1, name: 'FmDABCombined' }, { id: 266, name: 'CarPlayMedia' }, { id: 271, name: 'AndroidAutoGuidance' }, { id: 275, name: 'Navigation' },
+    { id: 279, name: 'TTS' }, { id: 287, name: 'CarLifeMedia' }, { id: 288, name: 'CarLifeNavigation' }, { id: 289, name: 'CarLifeSpeech' },
+    { id: 294, name: 'TencentTTS' }, { id: 297, name: 'TencentOverlay' }, { id: 1046, name: 'OAPGenericMedia' }, { id: 1047, name: 'OAPGenericInterrupt' },
+    { id: 1048, name: 'OAPGenericOverlay' }, { id: 1051, name: 'DynamicOverlay' }];
+// the SmartX endpoint of a name: its prefix, case-insensitive, 48 kHz stereo preferred
 {
-    assert.strictEqual(deviceFor('OAPGenericOverlay', ENDPOINTS), 'plug:smartx:OAPGenericOverlay_CF_48_STEREO');
-    assert.strictEqual(deviceFor('OAPGenericInterrupt', ENDPOINTS), 'plug:smartx:oapgenericinterrupt_CF_48_STEREO');
-    assert.strictEqual(deviceFor('NaviAnnouncement', ENDPOINTS), 'plug:smartx:NaviAnnouncement_CF_16_MONO');
-    assert.strictEqual(deviceFor('Navi', ENDPOINTS), 'plug:smartx:Navi_CF_48_STEREO', 'Navi_ beats NaviAnnouncement');
-    assert.strictEqual(deviceFor('TTS', ENDPOINTS), null);
-    assert.strictEqual(deviceFor('OAPGenericOverlay', null), null);
+    assert.strictEqual(deviceFor('TencentOverlay', ENDPOINTS), 'plug:smartx:TencentOverlay_CF_24_MONO');
+    assert.strictEqual(deviceFor('carlifenavigation', ENDPOINTS), 'plug:smartx:CarLifeNavigation_CF_24_MONO');
+    assert.strictEqual(deviceFor('CarPlayMain', ENDPOINTS), 'plug:smartx:CarPlayMain_CF_48_STEREO', '48 kHz stereo first');
+    assert.strictEqual(deviceFor('OAPGenericOverlay', ENDPOINTS), null, 'the OAP sources have no endpoint of their own');
+    assert.strictEqual(deviceFor('TencentOverlay', null), null);
 }
-// mix candidates: the default first, then prompt-like sources with an endpoint (no media, no source without endpoint)
+// mix candidates: the default (OAPGenericOverlay through the overlay converter's endpoint), then the China-only prompt
+// channels with an endpoint, to the front speakers and then to the main sink; never BMW's own navigation / speech,
+// CarPlay or Android Auto
 {
     const c = mixCandidates(SOURCES, ENDPOINTS);
-    assert.deepStrictEqual(c.map((x) => x.source), [1048, 1047, 30, 32]);
-    assert(c.every((x) => x.sink === 1024 && x.markAvailable === false && x.kind === 'mix'));
-    assert.strictEqual(c[1].device, 'plug:smartx:oapgenericinterrupt_CF_48_STEREO');
-    // no lists: only the default, on its fallback device
-    assert.deepStrictEqual(mixCandidates(null, null).map((x) => [x.source, x.device]), [[1048, MIX_DEFAULT.device]]);
+    assert.deepStrictEqual(c.map((x) => x.source + '>' + x.sink), ['1048>1024', '297>1024', '288>1024', '294>1024', '289>1024', '1048>1', '297>1', '288>1', '294>1', '289>1']);
+    assert.deepStrictEqual(c.slice(0, 3).map((x) => x.device), ['plug:smartx:Media_Overlay_Converter_Source_CF_24_MONO', 'plug:smartx:TencentOverlay_CF_24_MONO', 'plug:smartx:CarLifeNavigation_CF_24_MONO']);
+    assert.deepStrictEqual(c.slice(0, 5).map((x) => x.markAvailable), [false, true, true, true, true], 'only the China-only ones are marked available');
+    assert(c.every((x) => x.kind === 'mix'));
+    // a source the car does not list, or one without an endpoint, is no candidate
+    assert.deepStrictEqual(mixCandidates(SOURCES.filter((x) => x.id !== 297), ENDPOINTS).filter((x) => x.sink === 1024).map((x) => x.source), [1048, 288, 294, 289]);
+    assert.deepStrictEqual(mixCandidates(SOURCES, ENDPOINTS.filter((x) => !/CarLife/.test(x))).filter((x) => x.sink === 1024).map((x) => x.source), [1048, 297, 294]);
+    // no source list: the known ids; no lists at all: only the default, on its assumed device
+    assert.deepStrictEqual(mixCandidates(null, ENDPOINTS).filter((x) => x.sink === 1024).map((x) => x.source), [1048, 297, 288, 294, 289]);
+    assert.deepStrictEqual(mixCandidates(null, null).map((x) => [x.source, x.sink, x.device]), [[1048, 1024, MIX_DEFAULT.device], [1048, 1, MIX_DEFAULT.device]]);
+    assert.strictEqual(MIX_DEFAULT.device, 'plug:smartx:Media_Overlay_Converter_Source_CF_24_MONO');
 }
 // mix or exclusive
 {
-    const ex = routeFor(false, { name: 'Navi', source: 32, sink: 1024, device: 'plug:smartx:Navi_CF_48_STEREO' }, ENDPOINTS);
+    const tencent = { name: 'TencentOverlay', source: 297, sink: 1, device: 'plug:smartx:saved' };
+    const ex = routeFor(false, tencent, ENDPOINTS);
     assert.deepStrictEqual([ex.source, ex.sink, ex.device, ex.markAvailable], [287, 1024, 'plug:smartx:CarLifeMedia_CF_48_STEREO', true]);
-    const def = routeFor(true, null, ['OAPGenericOverlay_CF_48_STEREO_v2']);
-    assert.deepStrictEqual([def.source, def.device, def.markAvailable], [1048, 'plug:smartx:OAPGenericOverlay_CF_48_STEREO_v2', false]);
-    assert.strictEqual(routeFor(true, null, null).device, MIX_DEFAULT.device, 'no SHM list: the fallback device');
-    const navi = { name: 'Navi', source: 32, sink: 1024, device: 'plug:smartx:Navi_CF_48_STEREO' };
-    assert.strictEqual(mixRoute(navi, ENDPOINTS).source, 32);
-    assert.strictEqual(mixRoute(navi, null).device, navi.device, 'SHM unknown: the saved device');
-    const gone = mixRoute(navi, ['OAPGenericOverlay_CF_48_STEREO']);
-    assert.strictEqual(gone.source, 1048, 'endpoint gone: default');
+    const def = routeFor(true, null, ['Media_Overlay_Converter_Source_CF_24_MONO']);
+    assert.deepStrictEqual([def.source, def.sink, def.device, def.markAvailable, def.note], [1048, 1024, 'plug:smartx:Media_Overlay_Converter_Source_CF_24_MONO', false, undefined]);
+    assert.strictEqual(routeFor(true, null, null).device, MIX_DEFAULT.device, 'no SHM list: the assumed device');
+    assert(/assumed/.test(routeFor(true, null, ['CarLifeMedia_CF_48_STEREO']).note), 'SHM known, no converter endpoint: said so');
+    // a chosen route: its sink and source kept, the device from the list, marked available as its kind says
+    const t = mixRoute(tencent, ENDPOINTS);
+    assert.deepStrictEqual([t.source, t.sink, t.device, t.markAvailable, t.kind], [297, 1, 'plug:smartx:TencentOverlay_CF_24_MONO', true, 'mix']);
+    assert.strictEqual(mixRoute(tencent, null).device, 'plug:smartx:saved', 'SHM unknown: the saved device');
+    const main = mixRoute({ name: 'OAPGenericOverlay', source: 1048, sink: 1, device: 'x' }, ENDPOINTS);
+    assert.deepStrictEqual([main.source, main.sink, main.markAvailable], [1048, 1, false], 'the default source to the main sink is a choice of its own');
+    const gone = mixRoute(tencent, ['Media_Overlay_Converter_Source_CF_24_MONO']);
+    assert.deepStrictEqual([gone.source, gone.sink], [1048, 1024], 'endpoint gone: default');
     assert(/default used/.test(gone.note));
+    // a choice saved by an earlier version that is no mix source any more
+    const old = mixRoute({ name: 'OAPGenericInterrupt', source: 1047, sink: 1024, device: 'plug:smartx:OAPGenericInterrupt_CF_48_STEREO' }, ENDPOINTS);
+    assert.strictEqual(old.source, 1048);
+    assert(/no mix source/.test(old.note));
 }
 // the app: exclusive by default; mix on -> the mix route (reroute while playing); the mix device from SHM
 {
@@ -228,25 +247,24 @@ const SOURCES = [{ id: 287, name: 'CarLifeMedia' }, { id: 266, name: 'CarPlayMed
     core.feed({ rpm: 1500, speed: 30 });
     core.tick();
     assert.deepStrictEqual(routed, [['connect', 287]]);
-    daemon.shm = { endpoints: ['OAPGenericOverlay_CF_48_STEREO_x'] };
+    daemon.shm = { endpoints: ENDPOINTS };
     vals.mix = true; core.onSetting('mix');
     assert.deepStrictEqual(routed[1], ['disconnect']);
     core.feed({ rpm: 1500 }); step(20); core.tick();
     assert.deepStrictEqual(routed[2], ['connect', 1048]);
-    assert.strictEqual(sent.filter((l) => /^OUT /.test(l)).pop(), 'OUT plug:smartx:OAPGenericOverlay_CF_48_STEREO_x');
+    assert.strictEqual(sent.filter((l) => /^OUT /.test(l)).pop(), 'OUT plug:smartx:Media_Overlay_Converter_Source_CF_24_MONO');
     // a new mix choice
-    core.setMixChoice({ name: 'NaviAnnouncement', source: 30, sink: 1024, device: 'plug:smartx:x' });
-    daemon.shm = { endpoints: ENDPOINTS };
+    core.setMixChoice({ name: 'TencentOverlay', source: 297, sink: 1024, device: 'plug:smartx:x' });
     core.feed({ rpm: 1500 }); step(20); core.tick();
-    assert.deepStrictEqual(routed.slice(3), [['disconnect'], ['connect', 30]]);
-    assert.strictEqual(sent.filter((l) => /^OUT /.test(l)).pop(), 'OUT plug:smartx:NaviAnnouncement_CF_16_MONO');
+    assert.deepStrictEqual(routed.slice(3), [['disconnect'], ['connect', 297]]);
+    assert.strictEqual(sent.filter((l) => /^OUT /.test(l)).pop(), 'OUT plug:smartx:TencentOverlay_CF_24_MONO');
 }
 // the test sound: through a given route, then that route goes and tick() connects the active one again
 {
     const { core, sent, routed, step } = make();
     const cand = mixCandidates(SOURCES, ENDPOINTS)[1];
     core.test(cand);
-    assert.deepStrictEqual(routed[0], ['connect', 1047]);
+    assert.deepStrictEqual(routed[0], ['connect', 297]);
     assert(sent.indexOf('OUT ' + cand.device) >= 0);
     core.feed({ rpm: 1500, speed: 30 }); core.tick();
     assert.strictEqual(routed.length, 1, 'the test owns the route');
@@ -306,6 +324,24 @@ async function routeTests() {
         assert.deepStrictEqual(am.calls, ['connect 1048', 'disconnect 50']);
         assert.deepStrictEqual(am.conns, [other]);
         assert(!fs.existsSync(path.join(dir, 'route-state.json')));
+    }
+    // a China-only mix source: marked available while it plays (noted, so a start after a crash removes the mark too)
+    {
+        const am = fakeAM(), dir = tmp(), r = new Route(am.signals, quiet, dir);
+        const t = mixRoute({ name: 'TencentOverlay', source: 297, sink: 1024 }, ENDPOINTS);
+        assert.strictEqual(await r.connect(t), true);
+        assert.deepStrictEqual(am.calls, ['avail 297 A_AVAILABLE', 'connect 297']);
+        assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'route-state.json'), 'utf8')), { source: 297, sink: 1024, id: 50, marked: true });
+        await r.disconnect();
+        assert.deepStrictEqual(am.calls.slice(2), ['disconnect 50', 'avail 297 A_UNAVAILABLE']);
+        assert.strictEqual(am.conns.length, 0);
+        assert(!fs.existsSync(path.join(dir, 'route-state.json')));
+        // the crash: the noted connection and its mark go at the next start
+        fs.writeFileSync(path.join(dir, 'route-state.json'), JSON.stringify({ source: 297, sink: 1024, id: 9, marked: true }));
+        const am2 = fakeAM({ conns: [{ mainConnectionID: 9, sourceID: 297, sinkID: 1024 }] }), r2 = new Route(am2.signals, quiet, dir);
+        await r2.start();
+        assert.strictEqual(am2.conns.length, 0);
+        assert(am2.calls.indexOf('avail 297 A_UNAVAILABLE') >= 0, String(am2.calls));
     }
     // a failed connect leaves nothing behind: refused, or thrown after marking available
     {

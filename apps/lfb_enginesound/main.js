@@ -19,11 +19,11 @@ const { withAlpha } = require('./kit/canvas');
 const Car = require('./kit/car');
 const { Core, ORDER, SOUNDS, SOUND_SETTINGS } = require('./core');
 const { Daemon } = require('./daemon');
-const { Route, MIX_DEFAULT, mixCandidates, mixRoute, sameRoute } = require('./route');
+const { Route, MIX_DEFAULT, SINK, mixCandidates, mixRoute, sameRoute } = require('./route');
 
 const W = 1600, H = 520;
 const TABS = ['Engine', 'Sound', 'Audio'];
-const MIX_ROWS = 5;           // mix route candidates shown on the Audio page
+const MIX_ROWS = 5;           // mix route candidates shown on the Audio page at a time
 // the Sound page's sliders: track from SX0 to SX1, one row per setting
 const SX0 = 520, SX1 = 1290, ROW0 = 112, ROWH = 76;
 const FES = 'de.bmw.infotainment.drivingexcitement.FES';
@@ -72,8 +72,8 @@ async function background(bg) {
         },
         candidates() { return mixCandidates(audio.sources, core.endpoints()); },
         use(c) {
-            const d = !c || c.source === MIX_DEFAULT.source;
-            log.info('audio: mix route ' + (d ? 'default' : c.name + ' ' + c.source + ' ' + c.device));
+            const d = !c || sameRoute(c, MIX_DEFAULT);
+            log.info('audio: mix route ' + (d ? 'default' : c.name + ' ' + c.source + ' -> ' + c.sink + ' ' + c.device));
             mix.save(d ? null : c);
             core.setMixChoice(d ? null : c);
         },
@@ -139,7 +139,7 @@ mgu.run({
     async start(ctx) {
         const { ui, settings, log } = ctx;
         const { core, daemon, route, audio, report } = ctx.background || await background(ctx);
-        let diag = false, diagPage = 0;
+        let diag = false, diagPage = 0, mixPage = 0;
         let dirty = true, page = 0;
         const redraw = () => { dirty = true; return render(); };
 
@@ -301,8 +301,11 @@ mgu.run({
             cv.text('source ' + r.source + ' -> sink ' + r.sink, 600, 232, 17, t.dim, { align: 'right' });
             cv.text(r.device.replace(/^plug:smartx:/, 'SmartX ').slice(0, 56), 48, 262, 17, t.dim);
             cv.text(routeText(true).slice(0, 58), 48, 298, 17, route.state === 'failed' ? t.warn : route.state === 'connected' ? '#2fd27a' : t.dim);
+            // the synth's own word: does the car take the sound from this channel?
+            const heard = synthSays();
             if (r.note) cv.text(r.note.slice(0, 58), 48, 326, 16, t.warn);
-            G.button(cv, t, 48, 344, 552, 52, testing ? 'Test: listen...' : 'Test this route (10 s beeps)', testing ? null : () => { core.test(); return redraw(); },
+            else if (heard) cv.text(heard.text.slice(0, 58), 48, 326, 16, heard.ok ? '#2fd27a' : t.warn);
+            G.button(cv, t, 48, 344, 552, 52, testing ? 'Test: listen...' : 'Test this route (10 s beeps)', testing ? null : () => { tested_ = core.activeRoute(); core.test(); return redraw(); },
                 { key: 'test-route', busy: testing });
             const eps = core.endpoints();
             cv.text(audio.loading ? 'AudioManager: reading the sources...' : audio.sources ? 'AudioManager: ' + audio.sources.length + ' sources'
@@ -315,17 +318,51 @@ mgu.run({
             G.panel(cv, t, 640, 44, 936, 468, 'Mix routes');
             G.button(cv, t, 1416, 58, 144, 40, audio.loading ? 'Reading...' : 'Refresh', audio.loading ? null : () => { audio.refresh(); return redraw(); }, { key: 'refresh', busy: audio.loading });
             const list = audio.candidates(), chosen = mixRoute(core.mixChoice, eps);
-            list.slice(0, MIX_ROWS).forEach((c, i) => {
-                const y = 108 + i * 74, sel = sameRoute(c, chosen), tested = testing && sameRoute(c, core.testRoute);
+            const pages = Math.max(1, Math.ceil(list.length / MIX_ROWS));
+            mixPage = Math.min(mixPage, pages - 1);
+            if (pages > 1) G.button(cv, t, 1276, 58, 128, 40, (mixPage + 1) + ' / ' + pages, () => { mixPage = (mixPage + 1) % pages; return redraw(); }, { key: 'mix-page' });
+            list.slice(mixPage * MIX_ROWS, mixPage * MIX_ROWS + MIX_ROWS).forEach((c, i) => {
+                const y = 108 + i * 74, sel = sameRoute(c, chosen), tested = testing && sameRoute(c, core.testRoute), key = c.source + '-' + c.sink;
                 cv.roundRect(664, y, 888, 66, 14, sel ? withAlpha(t.accent, 0.22) : withAlpha('#ffffff', 0.05));
                 if (sel) cv.strokeRoundRect(664, y, 888, 66, 14, 2, t.accent);
-                cv.text(c.name + (i === 0 ? ' (default)' : ''), 684, y + 30, 22, t.text, { font: 'bold' });
-                cv.text(c.source + ' -> ' + c.sink + '   ' + c.device.replace(/^plug:smartx:/, ''), 684, y + 54, 15, t.dim);
-                G.button(cv, t, 1220, y + 9, 140, 48, tested ? 'Listen...' : 'Test', testing ? null : () => { core.test(c); return redraw(); }, { key: 'mt-' + c.source, busy: tested });
-                G.button(cv, t, 1372, y + 9, 168, 48, sel ? 'Chosen' : 'Use for mix', sel ? null : () => { audio.use(c); return redraw(); }, { key: 'mu-' + c.source, primary: sel });
+                cv.text(c.name + (sameRoute(c, MIX_DEFAULT) ? ' (default)' : ''), 684, y + 30, 22, t.text, { font: 'bold' });
+                cv.text(c.source + ' -> ' + c.sink + (c.sink === SINK ? ' front speakers' : ' main sink') + '   ' + c.device.replace(/^plug:smartx:/, ''), 684, y + 54, 15, t.dim);
+                G.button(cv, t, 1220, y + 9, 140, 48, tested ? 'Listen...' : 'Test', testing ? null : () => { tested_ = c; core.test(c); return redraw(); }, { key: 'mt-' + key, busy: tested });
+                G.button(cv, t, 1372, y + 9, 168, 48, sel ? 'Chosen' : 'Use for mix', sel ? null : () => { audio.use(c); return redraw(); }, { key: 'mu-' + key, primary: sel });
             });
-            if (list.length > MIX_ROWS) cv.text('+' + (list.length - MIX_ROWS) + ' more', 1552, 494, 15, t.dim, { align: 'right' });
-            else if (list.length === 1 && !audio.loading) cv.text(audio.sources ? 'No other prompt-like source with a SmartX endpoint' : 'Only the default (no source list)', 664, 494, 15, t.dim);
+            // the last test: what its channel did with the beeps
+            const res = testSays();
+            if (res) cv.text(res.text.slice(0, 96), 664, 494, 16, res.ok ? '#2fd27a' : res.ok === false ? t.warn : t.dim);
+            else if (list.length <= 2 && !audio.loading) cv.text(audio.sources ? 'No other mix source with a SmartX endpoint' : 'Only the default (no source list)', 664, 494, 15, t.dim);
+        }
+
+        /* What a synth's lines say about its device: { ok: true (the car takes the sound) | false | null (nothing yet), text }. */
+        function verdict(lines) {
+            const l = lines || [];
+            const has = (re) => l.filter((x) => re.test(x)).pop();
+            // (the latest of the two decides: a channel can start late)
+            const play = l.map((x) => /takes the sound/.test(x)).lastIndexOf(true), none = l.map((x) => /nobody reads/.test(x)).lastIndexOf(true);
+            if (play >= 0 && play > none) return { ok: true, text: 'the car takes the sound' };
+            if (none >= 0) return { ok: false, text: 'the car does not read this channel' };
+            const err = has(/refused|unavailable|retry|reconnecting/);
+            if (err) return { ok: false, text: String(err).replace(/^alsa: /, '').replace(/plug:smartx:/g, '') };
+            return { ok: null, text: has(/connected/) ? 'opened, waiting for the car to read it' : 'no answer yet' };
+        }
+        let tested_ = null;       // the route of the last test started here
+        /** The last test's result line (from the service's status), or null. */
+        function testSays() {
+            const lt = daemon.status && daemon.status.lastTone;
+            if (!lt || !tested_ || lt.dev !== tested_.device) return null;
+            const v = verdict(lt.lines);
+            return { ok: v.ok, text: 'Test ' + tested_.name + ' ' + tested_.source + ' -> ' + tested_.sink + ': ' + v.text
+                + (route.state === 'failed' ? ' (route failed: ' + (route.error || '') + ')' : '') };
+        }
+        /** The playing synth's word on its device (not during a test), or null. */
+        function synthSays() {
+            const st = daemon.status;
+            if (!st || st.tone || !st.device || Date.now() < core.testUntil) return null;
+            const v = verdict((st.log || []).filter((x) => /^alsa: /.test(x)));
+            return v.ok === null ? null : { ok: v.ok, text: 'Synth: ' + v.text };
         }
 
         // the audio report: small text, two columns, a page at a time (photograph it, or read audio-report.txt)
@@ -356,9 +393,11 @@ mgu.run({
         ctx.onTab((i) => { page = core.legacy() ? i : 0; if (i === 2 && Date.now() - audio.at > 30000) audio.refresh(); return redraw(); });
         daemon.on('change', () => { dirty = true; });
         settings.onChange(() => { dirty = true; });
-        let last = 0;
+        let last = 0, asked = 0;
         ctx.loop('MAIN', 10, () => {
             const n = Date.now();
+            // (a test's result comes with the service's status: asked every second meanwhile and shortly after)
+            if (page === 2 && n < core.testUntil + 3000 && n - asked > 1000) { asked = n; daemon.send('STATUS'); }
             // the live numbers: 10 times a second on the Engine page; the route's state twice a second on the Audio page
             if (dirty || (page === 0 && n - last > 100) || (page === 2 && n - last > 500)) { last = n; return render(); }
             return null;

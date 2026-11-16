@@ -10,10 +10,13 @@
  *              A_UNAVAILABLE without a CarLife phone and a connect to it stays CS_CONNECTING for ever, so it is
  *              marked available on the routing side while we play and unavailable again after. It replaces the
  *              music (the music pauses).
- *   mix        an announcement-like source (default OAPGenericOverlay, 1048) -> 1024, so the engine plays over the
- *              music as a navigation prompt does. Its device is the SmartX endpoint named after the source (found in
- *              the service's /dev/shm list), else plug:smartx:OAPGenericOverlay_CF_48_STEREO. BMW's own OAP sources
- *              are never marked available.
+ *   mix        a prompt / overlay source -> the speakers, so the engine plays over the music as a navigation prompt
+ *              does. Candidates are the sources in MIX_SOURCES that the car's AudioManager lists and that have a
+ *              SmartX playback endpoint (the service's /dev/shm list); the car's prompt endpoints are 24 kHz mono
+ *              (the synth converts). Default: OAPGenericOverlay (1048), BMW's overlay source for apps, whose audio
+ *              enters through the endpoint Media_Overlay_Converter_Source. The others are China-only channels
+ *              (Tencent, CarLife), free elsewhere; like CarLifeMedia they are marked available while we play.
+ *              BMW's own navigation, speech, phone, CarPlay and Android Auto sources are never used.
  *
  *   start(leftover):  at the app's start, what a crash or a power-off left goes: every 287 connection (only ours can
  *                     exist), 287 marked unavailable, and the mix connection we had open (`leftover`, the state file)
@@ -27,20 +30,30 @@ const path = require('path');
 
 const AM = 'org.genivi.am.commandinterface.CommandControl';
 const AMR = 'org.genivi.am.routinginterface.RoutingControlObserver';
-const SINK = 1024;   // the main speakers
+const SINK = 1024;        // MediaSink_Front: the front zone's speakers, where the car's own sources play
+const MAIN_SINK = 1;      // MainSink: offered as a second sink for the mix sources
 const EXCLUSIVE = Object.freeze({ kind: 'exclusive', name: 'CarLifeMedia', source: 287, sink: SINK,
     device: 'plug:smartx:CarLifeMedia_CF_48_STEREO', markAvailable: true });
+/* The mix sources, best first: { name (the AudioManager's), source (its id where the list is unavailable), endpoint
+ * (the SmartX endpoint's name where it is not the source's), mark (China-only: marked available while we play) }.
+ * From a G20 head unit's audio report: the OAPGeneric / Dynamic sources have no endpoint of their own. */
+const MIX_SOURCES = [
+    { name: 'OAPGenericOverlay', source: 1048, endpoint: 'Media_Overlay_Converter_Source', mark: false },
+    { name: 'TencentOverlay', source: 297, mark: true },
+    { name: 'CarLifeNavigation', source: 288, mark: true },
+    { name: 'TencentTTS', source: 294, mark: true },
+    { name: 'CarLifeSpeech', source: 289, mark: true },
+];
 const MIX_DEFAULT = Object.freeze({ kind: 'mix', name: 'OAPGenericOverlay', source: 1048, sink: SINK,
-    device: 'plug:smartx:OAPGenericOverlay_CF_48_STEREO', markAvailable: false });
-// AudioManager sources that sound like a prompt over the music (mix candidates)
-const MIX_WORDS = /overlay|interrupt|navi|tts|announcement|speech|prompt|chime/i;
+    device: 'plug:smartx:Media_Overlay_Converter_Source_CF_24_MONO', markAvailable: false });
+const mixSpec = (name) => MIX_SOURCES.find((x) => x.name.toLowerCase() === String(name || '').toLowerCase());
 
 /* ---------------- choosing a route (pure, tested in test/core.test.js) ---------------- */
 
 /**
- * The SmartX endpoint (from the service's SHM list, e.g. "OAPGenericOverlay_CF_48_STEREO") whose name starts with the
- * AudioManager source's name, case-insensitive, as an ALSA device ("plug:smartx:<endpoint>"); null if none. Best:
- * "<name>_CF_48_STEREO", then "<name>_..." (48 kHz, stereo preferred), then any other that starts with the name.
+ * The SmartX playback endpoint (from the service's SHM list, e.g. "TencentOverlay_CF_24_MONO") whose name starts
+ * with `name`, case-insensitive, as an ALSA device ("plug:smartx:<endpoint>"); null if none. Best: "<name>_CF_48_STEREO",
+ * then "<name>_..." (48 kHz, stereo preferred), then any other that starts with the name.
  */
 function deviceFor(name, endpoints) {
     if (!name || !Array.isArray(endpoints)) return null;
@@ -55,38 +68,50 @@ function deviceFor(name, endpoints) {
     return best ? 'plug:smartx:' + best[1] : null;
 }
 
+/** A mix source's device: its endpoint in the list; without a list, null. */
+const mixDevice = (spec, endpoints) => deviceFor(spec.endpoint || spec.name, endpoints);
+
 /**
- * The mix candidates for the Audio page: the default first (always, with its endpoint if found), then every
- * AudioManager source whose name sounds like a prompt (MIX_WORDS) and that has a SmartX endpoint.
- * sources = [{ id, name }] or null (list unavailable); endpoints = [names] or null.
+ * The mix candidates for the Audio page: every MIX_SOURCES entry the AudioManager lists (its id from there) and that
+ * has a SmartX endpoint, to the front speakers (1024) first, then the same ones to the MainSink (1). The default is
+ * always the first, on its assumed device when it has no endpoint in the list.
+ * sources = [{ id, name }] or null (list unavailable: the known ids); endpoints = [names] or null (unknown).
  */
 function mixCandidates(sources, endpoints) {
-    const out = [Object.assign({}, MIX_DEFAULT, { device: deviceFor(MIX_DEFAULT.name, endpoints) || MIX_DEFAULT.device })];
-    (sources || []).forEach((s) => {
-        if (!s || typeof s.id !== 'number' || !MIX_WORDS.test(s.name || '') || out.some((c) => c.source === s.id)) return;
-        const device = deviceFor(s.name, endpoints);
-        if (device) out.push({ kind: 'mix', name: String(s.name), source: s.id, sink: SINK, device, markAvailable: false });
+    const base = [];
+    MIX_SOURCES.forEach((spec, i) => {
+        const listed = (sources || []).find((x) => x && typeof x.id === 'number' && String(x.name || '').toLowerCase() === spec.name.toLowerCase());
+        const device = mixDevice(spec, endpoints);
+        if (i === 0) return base.push(Object.assign({}, MIX_DEFAULT, { source: listed ? listed.id : MIX_DEFAULT.source, device: device || MIX_DEFAULT.device }));
+        if (!device || (sources && !listed)) return null;
+        return base.push({ kind: 'mix', name: spec.name, source: listed ? listed.id : spec.source, sink: SINK, device, markAvailable: spec.mark });
     });
-    return out;
+    return base.concat(base.map((c) => Object.assign({}, c, { sink: MAIN_SINK })));
 }
 
 /**
  * The mix route: the saved choice ({ name, source, sink, device } or null = the default). With the SmartX list known
- * the device is looked up there (a choice whose endpoint is gone falls back to the default); without it the saved
- * device is used. `note` says why when it is not what was asked for.
+ * the device is looked up there (a choice whose endpoint is gone, or that is no mix source any more, falls back to
+ * the default); without it the saved device is used. `note` says why when it is not what was asked for.
  */
 function mixRoute(choice, endpoints) {
     const known = Array.isArray(endpoints);
-    if (choice && typeof choice.source === 'number' && choice.source !== MIX_DEFAULT.source && choice.name) {
-        const device = known ? deviceFor(choice.name, endpoints) : choice.device;
-        if (device) return Object.assign({}, MIX_DEFAULT, { name: String(choice.name), source: choice.source, sink: choice.sink || SINK, device });
+    const spec = choice && typeof choice.source === 'number' ? mixSpec(choice.name) : null;
+    if (spec) {
+        const device = known ? mixDevice(spec, endpoints) : choice.device || (spec === MIX_SOURCES[0] ? MIX_DEFAULT.device : null);
+        if (device || spec === MIX_SOURCES[0]) {
+            return Object.assign({ kind: 'mix', name: spec.name, source: choice.source, sink: choice.sink || SINK, device: device || MIX_DEFAULT.device, markAvailable: spec.mark },
+                device ? {} : { note: 'no SmartX endpoint ' + spec.endpoint + ': assumed ' + MIX_DEFAULT.device });
+        }
+    }
+    if (choice && choice.name) {
         const r = mixRoute(null, endpoints);
-        r.note = 'no SmartX endpoint for ' + choice.name + ': default used';
+        r.note = (spec ? 'no SmartX endpoint for ' : 'no mix source ') + choice.name + ': default used';
         return r;
     }
-    const device = known ? deviceFor(MIX_DEFAULT.name, endpoints) : null;
+    const device = known ? mixDevice(MIX_SOURCES[0], endpoints) : null;
     return Object.assign({}, MIX_DEFAULT, { device: device || MIX_DEFAULT.device },
-        known && !device ? { note: 'no SmartX endpoint ' + MIX_DEFAULT.name + ': assumed ' + MIX_DEFAULT.device } : {});
+        known && !device ? { note: 'no SmartX endpoint ' + MIX_SOURCES[0].endpoint + ': assumed ' + MIX_DEFAULT.device } : {});
 }
 
 /** The route to play on: mix (setting "Play over music") or exclusive. */
@@ -181,10 +206,12 @@ class Route {
                 // the exclusive source: every connection is ours (CarLifeMedia is China-only)
                 await this._sweep(EXCLUSIVE.source).catch((e) => this.log.warn('audio sweep: ' + e));
                 await this._avail(EXCLUSIVE.source, false);
-                // the mix source: only the connection we had open (a crash or a power-off while it played)
+                // the mix source: only the connection we had open (a crash or a power-off while it played), and its
+                // availability mark if we set one
                 const n = this._noted();
                 if (n && typeof n.source === 'number') {
                     await this._sweep(n.source, n.sink, n.id).catch((e) => this.log.warn('audio sweep: ' + e));
+                    if (n.marked) await this._avail(n.source, false);
                     this._note(null);
                 }
             } catch (e) { this.log.warn('audio start: ' + e); }
@@ -206,7 +233,7 @@ class Route {
                 if (!okReply(r)) throw new Error('connect refused (' + (r && r.amError) + ')');
                 // E_ALREADY_EXISTS: a connection that is not ours; we play into it and leave it alone
                 this.id = r.amError !== 'E_ALREADY_EXISTS' && r.mainConnectionID !== undefined && r.mainConnectionID !== null ? r.mainConnectionID : null;
-                if (route.kind === 'mix' && r.amError !== 'E_ALREADY_EXISTS') this._note({ source: route.source, sink: route.sink, id: this.id });
+                if (route.kind === 'mix' && (r.amError !== 'E_ALREADY_EXISTS' || route.markAvailable)) this._note({ source: route.source, sink: route.sink, id: this.id, marked: !!route.markAvailable });
                 this.state = 'connected';
                 this._check(gen, this.checkMs);
                 return true;
@@ -289,4 +316,4 @@ class Route {
     }
 }
 
-module.exports = { Route, EXCLUSIVE, MIX_DEFAULT, SINK, deviceFor, mixCandidates, mixRoute, routeFor, sameRoute };
+module.exports = { Route, EXCLUSIVE, MIX_DEFAULT, MIX_SOURCES, SINK, MAIN_SINK, deviceFor, mixCandidates, mixRoute, routeFor, sameRoute };

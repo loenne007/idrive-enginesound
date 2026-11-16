@@ -1,7 +1,8 @@
 'use strict';
 // node test/service.test.js: the service (tool/lfb-enginesound/esd.js) with a fake synth, driven by the app's own
 // client (apps/lfb_enginesound/daemon.js) over a real socket: every control line reaches the synth, and the kept
-// ones (preset, turbo, volume, mute, every sound setting) are replayed when the synth or the connection restarts.
+// ones (preset, turbo, volume, mute, every sound setting) are replayed when the synth or the connection restarts;
+// the SmartX playback endpoints are read from the shared-memory files; a test tone's result is in the status.
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -14,9 +15,18 @@ const logFile = path.join(dir, 'synth.log'), fake = path.join(dir, 'es-synth-fak
 fs.writeFileSync(fake, '#!/usr/bin/env node\n' +
     "const fs = require('fs'), log = (l) => fs.appendFileSync(" + JSON.stringify(logFile) + ", l + '\\n');\n" +
     "log('START ' + process.argv.slice(2).join(' '));\n" +
+    // (a test tone: what the real synth says once the car reads the device)
+    "if (process.argv[2] === '--tone') { console.error('alsa: connected ' + process.argv[3].slice(5) + ' (24000 Hz, mono)'); console.error('alsa: playing (the device takes the sound)'); setTimeout(() => process.exit(0), 200); }\n" +
     "let b = ''; process.stdin.on('data', (d) => { b += d; let i; while ((i = b.indexOf('\\n')) >= 0) { const l = b.slice(0, i); b = b.slice(i + 1); log(l); if (l === 'Q') process.exit(0); } });\n");
 fs.chmodSync(fake, 0o755);
-const env = Object.assign({}, process.env, { ES_RUN_DIR: dir, ES_SYNTH: fake, ES_SHM: dir });
+// the shared-memory files of a G20 head unit (a few of them): p = playback endpoints, c = capture
+const shm = path.join(dir, 'shm');
+fs.mkdirSync(shm);
+['smartx_CarLifeMedia_CF_48_STEREO_p_connection', 'smartx_CarLifeMedia_CF_48_STEREO_p_ringbuffer', 'smartx_TencentOverlay_CF_24_MONO_p_connection',
+    'smartx_TencentOverlay_CF_24_MONO_p_ringbuffer', 'smartx_Media_Overlay_Converter_Source_CF_24_MONO_p_connection', 'smartx_CarLifeSink_CF_24_MONO_c_connection',
+    'smartx_ECNR_Uplink_Sink_CF_2MIC_1REF_CONN_c_connection', 'avb_MGU_GW_1_SINK_CF_48_STEREO_p_connection', 'smartx_stopped', 'ufipc.IASMediaBus']
+    .forEach((f) => fs.writeFileSync(path.join(shm, f), ''));
+const env = Object.assign({}, process.env, { ES_RUN_DIR: dir, ES_SYNTH: fake, ES_SHM: shm });
 const esd = spawn(process.execPath, [path.join(__dirname, '../tool/lfb-enginesound/esd.js')], { env, stdio: 'ignore' });
 process.env.ES_CTL_SOCK = path.join(dir, 'ctl.sock');
 const { Daemon } = require('../apps/lfb_enginesound/daemon');
@@ -57,6 +67,16 @@ async function until(what, fn) {
     const st = await new Promise((r) => { d.once('change', () => r(d.status)); d.send('STATUS'); });
     assert.strictEqual(st.synth, 'running');
     assert.strictEqual(st.device, 'devB');
+    // the SmartX playback endpoints, from the files' names
+    await until('the endpoint list arrives', () => d.shm && Array.isArray(d.shm.endpoints));
+    assert.deepStrictEqual(d.shm.endpoints, ['CarLifeMedia_CF_48_STEREO', 'Media_Overlay_Converter_Source_CF_24_MONO', 'TencentOverlay_CF_24_MONO']);
+    // a test tone: its synth's lines come back in the status (the Audio page's "the car takes the sound")
+    d.send('TONE plug:smartx:TencentOverlay_CF_24_MONO');
+    await until('the tone ran', () => lines().indexOf('START --tone alsa:plug:smartx:TencentOverlay_CF_24_MONO') >= 0);
+    await sleep(400);
+    const st2 = await new Promise((r) => { d.once('change', () => r(d.status)); d.send('STATUS'); });
+    assert.strictEqual(st2.lastTone.dev, 'plug:smartx:TencentOverlay_CF_24_MONO');
+    assert(st2.lastTone.lines.some((l) => /takes the sound/.test(l)), JSON.stringify(st2.lastTone));
     console.log('service.test.js: ok');
     esd.kill('SIGTERM');
     setTimeout(() => process.exit(0), 300);

@@ -84,25 +84,32 @@ instead of the five sounds, and two more pages show:
 [Moonride](https://github.com/JustAnotherPU/moonride) uses on iDrive 7. The music pauses while the engine plays and
 comes back a few seconds after it stops.
 
-**Mix** (*Play over music (mix)* in Settings, or the audio mode button on the page): the engine plays over the music, as a
-navigation prompt does (the car decides whether it mixes or ducks the music). The default mix route is the
-AudioManager source `OAPGenericOverlay` (1048) to the main speakers (1024); its SmartX endpoint is found by name in
-the service's list of SmartX shared-memory files (`/dev/shm`), falling back to
-`plug:smartx:OAPGenericOverlay_CF_48_STEREO`.
+**Mix** (*Play over music (mix)* in Settings, or the audio mode button on the page): the engine plays over the
+music, as a navigation prompt does (the car decides whether it mixes or ducks the music). The car's prompt and
+overlay channels are 24 kHz mono; the synth opens them in that format and converts (mono sum, low-pass, every second
+sample), so mix sounds a little duller and narrower than exclusive.
 
-Mix is new and not yet confirmed in the car. To find a route that works:
+The default mix route is the AudioManager source `OAPGenericOverlay` (1048), BMW's overlay source for apps, to the
+front speakers (`MediaSink_Front`, 1024). It has no SmartX endpoint of its own: its audio enters through
+`Media_Overlay_Converter_Source_CF_24_MONO`. The alternatives are China-only channels that are free elsewhere, as
+CarLifeMedia is: `TencentOverlay`, `CarLifeNavigation`, `TencentTTS`, `CarLifeSpeech`; like CarLifeMedia they are
+marked available only while the engine plays. BMW's own navigation, speech, phone, CarPlay and Android Auto channels
+are never used.
 
-1. Switch *Settings → Legacy* on and open the **Audio** page. It reads the AudioManager's sources and the SmartX endpoints (**Refresh** reads them
-   again) and lists the **mix candidates**: the default, and every source whose name sounds like a prompt
-   (Overlay, Interrupt, Navi, TTS, Announcement, Speech, Prompt, Chime) and that has a SmartX endpoint.
-2. Play some music, then press **Test** on a candidate: 10 s of beeps through that route. If you hear the beeps
+Mix is not yet confirmed in the car. To find the route that works:
+
+1. Switch *Settings → Legacy* on and open the **Audio** page. It reads the AudioManager's sources and the SmartX
+   endpoints (**Refresh** reads them again) and lists the **mix routes**: each source above that the car has, to the
+   front speakers and, on the second page, to the main sink.
+2. Play some music, then press **Test** on a route: 10 s of beeps through it. The line under the list says what the
+   car did with them: *the car takes the sound*, or *the car does not read this channel*. If you also hear the beeps
    with the music still playing (perhaps quieter), that route mixes.
 3. Press **Use for mix** on it (kept in the app's data folder, `mix-route.json`) and switch to **Over the music**.
 
 If the AudioManager or the SmartX list is unavailable, the default is used and the page says so. A mix route that
 the AudioManager refuses, or that does not reach `CS_CONNECTED` within 6 s, is released and shown as failed (also in
-the app's log). No connection and no "available" mark is ever left behind: only the China-only CarLifeMedia is marked
-available, and only while it plays; leftovers of a crash or a power-off are removed at the next start.
+the app's log). No connection and no "available" mark is ever left behind: a mark is set only on a China-only
+channel and only while it plays; leftovers of a crash or a power-off are removed at the next start.
 
 ## Speaker protection
 

@@ -12,7 +12,8 @@
  *   ENGINE <engine>          the sound engine (es-synth-<engine>; the ids before 1.0, a / b / c / d, are mapped);
  *                            the synth restarts with it
  *   OUT <alsa device>|none   play into that ALSA device (the synth is started / restarted on it); none stops it
- *   TONE <alsa device>       routing test: 10 s of beeps into that device (the synth is paused meanwhile)
+ *   TONE <alsa device>       routing test: 10 s of beeps into that device (the synth is paused meanwhile); what its
+ *                            synth says is in STATUS as lastTone
  *   STATUS                   one JSON status line back
  *   SHM                      the SmartX endpoints found in /dev/shm, as JSON
  * Every other line (P / E / T / V / M / S / X, see synth/PROTOCOL.md) goes to the synth's stdin as it is. The last
@@ -27,7 +28,7 @@ const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 const RUN_DIR = process.env.ES_RUN_DIR || '/run/lfb-enginesound';
 const SOCK = path.join(RUN_DIR, 'ctl.sock');
 const SYNTH_DIR = process.env.ES_SYNTH_DIR || __dirname;
@@ -57,7 +58,7 @@ function stickyKey(line) {
 const log = (m) => process.stderr.write(new Date().toISOString().slice(11, 19) + ' esd: ' + m + '\n');
 
 /* ---------------- the synth process ---------------- */
-const state = { engine: null, device: null, tone: null, sticky: {}, recent: [], starts: 0, lastStart: 0, child: null, retryT: null };
+const state = { engine: null, device: null, tone: null, lastTone: null, sticky: {}, recent: [], starts: 0, lastStart: 0, child: null, retryT: null };
 const remember = (line) => { state.recent.push(line); if (state.recent.length > 30) state.recent.shift(); };
 
 function startSynth() {
@@ -145,11 +146,13 @@ function tone(dev) {
     if (state.tone) return;
     stopSynth(() => {
         log('tone ' + dev);
+        state.lastTone = { dev, lines: [] };     // what this test's synth said (does the device take the sound?)
+        const said = (l) => { remember('tone: ' + l); if (state.lastTone.lines.length < 12) state.lastTone.lines.push(l); };
         let child;
         try { child = spawn(synthPath(), ['--tone', 'alsa:' + dev], { stdio: ['ignore', 'ignore', 'pipe'] }); } catch (e) { log('tone: ' + e); startSynth(); return; }
         state.tone = { dev, child };
-        child.on('error', (e) => remember('tone: ' + e.message));
-        child.stderr.on('data', (d) => d.toString().split('\n').filter(Boolean).forEach((l) => remember('tone: ' + l)));
+        child.on('error', (e) => said(e.message));
+        child.stderr.on('data', (d) => d.toString().split('\n').filter(Boolean).forEach(said));
         const end = () => { if (state.tone && state.tone.child === child) { state.tone = null; startSynth(); } };
         child.on('exit', end);
         setTimeout(() => { try { child.kill('SIGTERM'); } catch (e) {} }, 12000);
@@ -157,15 +160,20 @@ function tone(dev) {
 }
 
 /* ---------------- SmartX endpoints ---------------- */
-// SmartX keeps a shared-memory file per ALSA endpoint, named after the endpoint (e.g. CarLifeMedia_CF_48_STEREO...).
+// SmartX keeps two shared-memory files per ALSA endpoint, smartx_<endpoint>_<p|c>_connection and ..._ringbuffer
+// (p: a playback endpoint, we write into it; c: a capture endpoint), e.g. smartx_CarLifeMedia_CF_48_STEREO_p_connection.
+/** The playback endpoint a /dev/shm file belongs to, or null. */
+function endpointOf(file) {
+    const m = /^smartx_(.+?_CF_\d+_[A-Za-z0-9_]+?)_([pc])_(?:connection|ringbuffer)$/.exec(file)
+        || /^(?:smartx_)?()([A-Za-z0-9]+(?:_[A-Za-z0-9]+)*?_CF_\d+_[A-Z_]+?)(?:_connection|_ringbuffer)?$/.exec(file);   // no direction mark
+    if (!m) return null;
+    return m[2] === 'c' ? null : m[2] === 'p' ? m[1] : m[2];
+}
 function shmEndpoints() {
     let names = [];
     try { names = fs.readdirSync(SHM); } catch (e) { return { error: String(e.code || e), endpoints: [] }; }
     const seen = {};
-    names.forEach((n) => {
-        const m = /^(?:smartx[_.-]?)?([A-Za-z0-9]+(?:_[A-Za-z0-9]+)*?_CF_\d+_[A-Z_]+?)(?:_connection|_ringbuffer|_rb|_ctrl|_shm)?$/.exec(n);
-        if (m) seen[m[1]] = true;
-    });
+    names.forEach((n) => { const e = endpointOf(n); if (e) seen[e] = true; });
     // every file with its mode and group, for the app's audio report (which ones may we open?)
     const all = names.slice(0, 200).map((n) => {
         try { const st = fs.statSync(path.join(SHM, n)); return n + ' ' + (st.mode & 0o777).toString(8) + ' ' + st.uid + ':' + st.gid; } catch (e) { return n; }
@@ -177,7 +185,7 @@ function shmEndpoints() {
 function status() {
     return {
         type: 'status', version: VERSION, device: state.device, synth: state.child ? 'running' : state.device ? 'starting' : 'stopped',
-        tone: state.tone ? state.tone.dev : null, sticky: state.sticky, log: state.recent.slice(-16),
+        tone: state.tone ? state.tone.dev : null, lastTone: state.lastTone, sticky: state.sticky, log: state.recent.slice(-16),
         engine: path.basename(synthPath()).replace(/^es-synth-/, ''), engines: engines(), synthFile: fs.existsSync(synthPath()),
     };
 }
@@ -232,4 +240,4 @@ process.on('SIGINT', quit);
 process.on('uncaughtException', (e) => log('uncaught: ' + (e && e.stack || e)));
 
 if (require.main === module) listen();
-module.exports = { handle, shmEndpoints, status, state };
+module.exports = { handle, endpointOf, shmEndpoints, status, state };

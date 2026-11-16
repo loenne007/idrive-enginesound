@@ -13,8 +13,9 @@ es-synth-<id> --bench <seconds>      # render speed per preset
 ```
 
 e.g. `es-synth-simulate --out alsa:plug:smartx:CarLifeMedia_CF_48_STEREO --preset v8` in the car, or
-`synth/simulate/build/es-synth-host --out wav:v8.wav --demo 40 --preset v8` on a computer. Output: 48 kHz S16LE stereo
-(identical channels). Logs go to stderr. A script has one `<seconds> <control line>` per line, in order (see
+`synth/simulate/build/es-synth-host --out wav:v8.wav --demo 40 --preset v8` on a computer. Output: 48 kHz S16LE stereo.
+An ALSA device whose name says another format (`..._CF_24_MONO`, the car's prompt channels) is opened in that format
+and the output converted (`synth/common/out_alsa.c`). Logs go to stderr. A script has one `<seconds> <control line>` per line, in order (see
 `synth/waveguide/README.md`). `ES_ALSA_US` sets the ALSA buffer (default 64000 us).
 
 ## Control lines

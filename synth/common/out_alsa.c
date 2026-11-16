@@ -2,6 +2,7 @@
 #include "out_alsa.h"
 #include <dlfcn.h>
 #include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,8 +45,34 @@ void alsa_close(Alsa *a) {
     }
 }
 
+/* The device's own format, from a SmartX endpoint's name: ..._CF_<kHz>_<MONO|STEREO...>; else 48 kHz stereo. */
+static void format_of(const char *dev, unsigned *rate, unsigned *channels) {
+    const char *p = strstr(dev, "_CF_");
+    char *end;
+    *rate = 48000, *channels = 2;
+    if (!p) return;
+    if (strtol(p + 4, &end, 10) == 24) *rate = 24000;
+    if (strstr(end, "MONO")) *channels = 1;
+}
+
+/* The 2:1 decimator's low-pass: windowed sinc (Blackman), cut-off 11 kHz at 48 kHz: flat to ~8 kHz, 70 dB down from
+ * ~14 kHz, so nothing audible folds back below 10 kHz at 24 kHz. */
+static void decimator(Alsa *a) {
+    double sum = 0;
+    int k;
+    for (k = 0; k < ALSA_FIR; k++) {
+        double m = k - (ALSA_FIR - 1) / 2., x = 2 * 3.141592653589793 * 11000. / 48000. * m;
+        double w = .42 - .5 * cos(2 * 3.141592653589793 * k / (ALSA_FIR - 1)) + .08 * cos(4 * 3.141592653589793 * k / (ALSA_FIR - 1));
+        a->fir[k] = (float)((m == 0 ? 1 : sin(x) / x) * w);
+        sum += a->fir[k];
+    }
+    for (k = 0; k < ALSA_FIR; k++) a->fir[k] = (float)(a->fir[k] / sum);
+    memset(a->ring, 0, sizeof(a->ring));
+    a->ring_pos = a->phase = 0;
+}
+
 static int open_pcm(Alsa *a, const char *dev, double now) {
-    unsigned us = 64000;
+    unsigned us = 64000, rate, channels;
     const char *env = getenv("ES_ALSA_US");
     int e;
     if (now < a->retry) return 0;
@@ -61,8 +88,17 @@ static int open_pcm(Alsa *a, const char *dev, double now) {
         return 0;
     }
     e = a->open(&a->pcm, dev, 0 /* PLAYBACK */, 1 /* SND_PCM_NONBLOCK */);
-    /* S16_LE = 2, RW_INTERLEAVED = 3, 2 channels, 48 kHz, soft resample on */
-    if (e >= 0) e = a->params(a->pcm, 2, 3, 2, 48000, 1, us);
+    /* S16_LE = 2, RW_INTERLEAVED = 3, soft resample on: the endpoint's own format; if the device refuses it,
+     * 48 kHz stereo (an ALSA plug in front converts) */
+    format_of(dev, &rate, &channels);
+    if (e >= 0) {
+        e = a->params(a->pcm, 2, 3, channels, rate, 1, us);
+        if (e < 0 && (rate != 48000 || channels != 2)) {
+            fprintf(stderr, "alsa: %s: %u Hz %u ch refused (%s); trying 48000 Hz stereo\n", dev, rate, channels, a->error(e));
+            rate = 48000, channels = 2;
+            e = a->params(a->pcm, 2, 3, channels, rate, 1, us);
+        }
+    }
     if (e < 0) {
         fprintf(stderr, "alsa: %s: %s; retry in 2s\n", dev, a->error(e));
         if (a->pcm) {
@@ -77,12 +113,14 @@ static int open_pcm(Alsa *a, const char *dev, double now) {
     {
         unsigned long buffer = 0, period = 0;
         const char *k = getenv("ES_ALSA_KEEP");
-        if (a->get_params(a->pcm, &buffer, &period) < 0 || buffer < 512) buffer = (unsigned long)us * 48 / 1000, period = 0;
+        a->rate = rate, a->channels = channels, a->div = rate == 24000 ? 2 : 1;
+        decimator(a);
+        if (a->get_params(a->pcm, &buffer, &period) < 0 || buffer < 256) buffer = (unsigned long)us * (rate / 1000) / 1000, period = 0;
         a->buffer = (long)buffer;
-        a->keep = period >= 256 && buffer >= 3 * period ? (long)(buffer - period) : (long)buffer;
+        a->keep = period >= 128 && buffer >= 3 * period ? (long)(buffer - period) : (long)buffer;
         if (k) {
             long x = strtol(k, 0, 10);
-            if (x >= 512 && x <= a->buffer) a->keep = x;
+            if (x >= 256 && x <= a->buffer) a->keep = x;
         }
         a->target = a->buffer;
         a->started = 0;
@@ -91,7 +129,8 @@ static int open_pcm(Alsa *a, const char *dev, double now) {
         a->stat_at = now + 2;
         a->stat_state = 0;
     }
-    fprintf(stderr, "alsa: connected %s (%ld frames buffer, %ld kept queued)\n", dev, a->buffer, a->keep);
+    fprintf(stderr, "alsa: connected %s (%u Hz, %s, %ld frames buffer, %ld kept queued)\n", dev, a->rate,
+            a->channels == 1 ? "mono" : "stereo", a->buffer, a->keep);
     return 1;
 }
 
@@ -126,29 +165,59 @@ long alsa_room(Alsa *a, const char *dev, double now) {
             return -1;
         }
         a->started = 0, a->target = a->buffer, a->expect = -1; /* recovered: stopped again until the buffer is full */
-        return a->target;
+        return a->target * a->div;
     }
     if (delay < 0) delay = 0;
     status(a, now);
     /* the queue went down by itself: the device takes frames, playback runs: from now one period less is kept */
     if (!a->started && a->expect >= 0 && delay < a->expect) a->started = 1, a->target = a->keep;
     a->expect = delay;
-    if (!a->started) return delay < a->buffer ? a->buffer : 0; /* fill it up (a last short write may drop its tail) */
-    return delay >= a->target ? 0 : a->target - delay;          /* (never negative: that means "not open") */
+    if (!a->started) return delay < a->buffer ? a->buffer * a->div : 0; /* fill it up (a last short write may drop its tail) */
+    return delay >= a->target ? 0 : (a->target - delay) * a->div;      /* (never negative: that means "not open") */
 }
 
-void alsa_write(Alsa *a, const int16_t *buf, unsigned n, double now) {
+/* n engine frames (48 kHz stereo) in the device's format into out; returns the device frames. n <= ALSA_CHUNK. */
+#define ALSA_CHUNK 1024
+static unsigned convert(Alsa *a, const int16_t *in, unsigned n, int16_t *out) {
+    unsigned i, m = 0;
+    int c, k;
+    if (a->div == 1) { /* 48 kHz mono */
+        for (i = 0; i < n; i++) out[i] = (int16_t)((in[2 * i] + in[2 * i + 1]) / 2);
+        return n;
+    }
+    for (i = 0; i < n; i++) {
+        float l = in[2 * i], r = in[2 * i + 1];
+        if (a->channels == 1) a->ring[0][a->ring_pos] = .5f * (l + r);
+        else a->ring[0][a->ring_pos] = l, a->ring[1][a->ring_pos] = r;
+        a->ring_pos = (a->ring_pos + 1) % ALSA_FIR;
+        if ((a->phase ^= 1)) continue; /* every second frame gives one */
+        for (c = 0; c < (int)a->channels; c++) {
+            float y = 0;
+            int p = a->ring_pos; /* the oldest sample */
+            for (k = 0; k < ALSA_FIR; k++) {
+                y += a->fir[k] * a->ring[c][p];
+                if (++p == ALSA_FIR) p = 0;
+            }
+            out[m * a->channels + c] = (int16_t)lrintf(y > 32767 ? 32767 : y < -32768 ? -32768 : y);
+        }
+        m++;
+    }
+    return m;
+}
+
+/* one block in the device's format; returns 0 when the device was dropped */
+static int write_dev(Alsa *a, const int16_t *buf, unsigned n, double now) {
     long r;
-    if (!a->pcm) return;
+    if (!n) return 1;
     r = a->write(a->pcm, buf, n); /* a short write drops the tail: the queue is near its target anyway */
     if (r >= 0) {
-        a->taken += r;
+        a->taken += r * a->div;
         if (a->expect >= 0) a->expect += r;
-        return;
+        return 1;
     }
     if (r == -EAGAIN) { /* full and nobody reads (the source not connected): the block goes */
         a->refused++;
-        return;
+        return 1;
     }
     if (a->recover(a->pcm, (int)r, 1) < 0) {
         if (now >= a->log_at) {
@@ -156,6 +225,22 @@ void alsa_write(Alsa *a, const int16_t *buf, unsigned n, double now) {
             a->log_at = now + 2;
         }
         drop_pcm(a, now + 2);
-    } else
-        a->started = 0, a->target = a->buffer, a->expect = -1; /* an underrun recovered: fill up again */
+        return 0;
+    }
+    a->started = 0, a->target = a->buffer, a->expect = -1; /* an underrun recovered: fill up again */
+    return 1;
+}
+
+void alsa_write(Alsa *a, const int16_t *buf, unsigned n, double now) {
+    int16_t tmp[ALSA_CHUNK * 2];
+    if (!a->pcm) return;
+    if (a->rate == 48000 && a->channels == 2) { /* as it is */
+        write_dev(a, buf, n, now);
+        return;
+    }
+    while (n && a->pcm) {
+        unsigned part = n < ALSA_CHUNK ? n : ALSA_CHUNK;
+        if (!write_dev(a, tmp, convert(a, buf, part, tmp), now)) return;
+        buf += 2 * part, n -= part;
+    }
 }
