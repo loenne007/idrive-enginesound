@@ -1,9 +1,12 @@
-# es-synth
+# Waveguide sound engine (`es-synth-waveguide`)
 
-Small C99 procedural petrol-engine audio source for the 320d / iDrive 7 overlay.
-No recorded samples, ALSA build dependency, runtime heap allocation in the DSP,
-convolution, or extra thread. Output: 48,000 Hz, signed 16-bit little-endian,
-interleaved stereo (identical L/R for reliable cabin mono compatibility).
+Engine_Sim's sound path rewritten in C99 for the 320d's iDrive 7: combustion
+events into delay-line waveguide pipes, muffler, airbox, a sub layer, a turbo
+layer and the master chain, driven live by the car's telemetry. No recorded
+samples, no ALSA build dependency, no heap allocation in the DSP, no
+convolution, no extra thread. Output: 48,000 Hz, signed 16-bit little-endian,
+interleaved stereo (identical L/R). The shared speaker protection
+(`../common/protect.h`) is the last stage.
 
 ## Build and verify
 
@@ -16,9 +19,10 @@ make car
 
 `make host` produces `build/es-synth-host`. `make car` uses
 `$(HOME)/.local/zig/zig-aarch64-macos-0.17.1/zig` (override `ZIG`) with
-`-target x86_64-linux-gnu.2.27 -O2 -s`, then copies the stripped ELF to
-`../tool/lfb-enginesound/es-synth`. The car target runs `file` and a dynamic
-symbol version check; details are saved in `build/glibc-symbols.txt`.
+`-target x86_64-linux-gnu.2.27 -O2 -s` and the loader `/lib/ld-linux-x86-64.so.2`,
+then copies the stripped ELF to `../../tool/lfb-enginesound/es-synth-waveguide`
+and checks it (`file`, `../../tools/check_glibc.py`: symbol versions <= 2.27,
+the loader; the symbols go to `build/glibc-symbols.txt`).
 Both targets use only libc and libm; Linux also links libdl. Python 3, without
 third-party packages, supports offline verification and sample packaging.
 
@@ -37,21 +41,19 @@ rapid engine switching, RPM jumps, malformed commands, mute, quit and stale-inpu
 all presets. FFT tests use Hann windows and are objective regressions, not a
 substitute for listening. `build/` contains additional stereo test renders.
 
-The four delivered `samples/*.wav` are 40-second **mono** PCM preview files
-(3,840,044 bytes each); live and normal WAV output remain stereo. A 40-second
-48 kHz stereo PCM file cannot fit the requested 4 MB ceiling (7,680,044 bytes).
-`render_all.sh` first renders the normal stereo file, then losslessly removes
-the identical right channel to satisfy the size ceiling.
+The four `samples/*.wav` are the 40-second demo drives as **mono** PCM
+(3,840,044 bytes each): `render_all.sh` renders the normal stereo file and drops
+the identical right channel. Live and normal WAV output remain stereo.
 
 ## Use
 
 ```
-./es-synth --out alsa:plug:smartx:OAPGenericOverlay_CF_48_STEREO --preset v8 --volume 0.8
+es-synth-waveguide --out alsa:plug:smartx:CarLifeMedia_CF_48_STEREO --preset v8 --volume 0.8
 ./build/es-synth-host --out wav:build/demo.wav --demo 40 --preset v10
 ./build/es-synth-host --out wav:build/events.wav --script build/drive.txt
-./es-synth --out raw --preset i6
-./es-synth --tone alsa:plug:smartx:OAPGenericOverlay_CF_48_STEREO
-./es-synth --info
+./build/es-synth-host --out raw --preset i6
+es-synth-waveguide --tone alsa:plug:smartx:CarLifeMedia_CF_48_STEREO
+./build/es-synth-host --info
 ./build/es-synth-host --bench 60
 ```
 
@@ -79,6 +81,7 @@ through 2nd, light cruise in 6th, then stop/idle. The final half second fades.
 
 ## Control protocol
 
+The shared protocol (`../PROTOCOL.md`), as this engine implements it.
 Newline-terminated ASCII on stdin, typically 20–100 Hz:
 
 | Command | Effect |
@@ -222,11 +225,10 @@ values for its i6, v8cross, v10 and v12 engines. These are evocative synthetic
 presets, not measured BMW engine/exhaust models or recordings.
 
 **Measured against the Engine_Sim reference MP3s** (same rpm/throttle traces
-replayed through es-synth; `build/compare.png` shows spectrograms side by side):
+replayed through this engine):
 spectral centroid i6-turbo 197 Hz (ref 254), v8 182 (214), v10 365 (357), v12 376
 (354); share of energy below 300 Hz 97/78/56/51 % (ref 93/69/65/66 %);
-cycle-to-cycle energy variation 12-22 % (ref 10-21 %). The previous synth had a
-900-1300 Hz centroid with almost nothing below 100 Hz. es-synth is about 3 dB
+cycle-to-cycle energy variation 12-22 % (ref 10-21 %). It is about 3 dB
 darker than the references in 1-3 kHz (cabin filter, and no gearbox-whine layer)
 and its turbo has much less 3-8 kHz air. Bench on an Apple M-series core:
 163-198x realtime per preset.

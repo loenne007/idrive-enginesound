@@ -1,16 +1,15 @@
-# es-synth, engine D: active sound design for the car's own diesel
+# Bass sound engine (`es-synth-bass`): active sound design for the car's own diesel
 
-Engine D does what the factory systems do (BMW Active Sound Design in the X7 / X5 xDrive40d with the B57
+This engine does what the factory systems do (BMW Active Sound Design in the X7 / X5 xDrive40d with the B57
 straight-six diesel, the Audi S6 / S7 TDI and SQ7 TDI sound actuator / active exhaust). It does **not** simulate a
 foreign petrol engine. It **adds rpm-locked engine orders** to what the cabin already hears from the 320d's own B47.
-It is driven live by telemetry: real rpm, crank-torque load, pedal, gear and speed. Since version 4 it is first of
-all a **bass enhancer**, as the owner asked ("not trying to simulate an engine but rather give it bass"). It adds
-low, rpm-locked depth under the real diesel: 30-150 Hz, with only a little up to about 250 Hz for definition on
+It is driven live by telemetry: real rpm, crank-torque load, pedal, gear and speed. It is first of all a **bass
+enhancer**: not another engine, but low, rpm-locked depth under the real diesel: 30-150 Hz, with only a little up to about 250 Hz for definition on
 small speakers. The real B47 supplies the mids and highs.
 
 C99, no heap allocation in the audio path, no samples, no extra thread. Output is 48 kHz S16 stereo (identical
-L/R). The last stage is the shared speaker protection (`protect.h`, a copy of `synth/common/protect.h`), as in
-engines A and B. `main.c` and `out_alsa.c/.h` are engine A's, unchanged.
+L/R). The last stage is the shared speaker protection (`../common/protect.h`), as in every engine. `main.c` and
+`out_alsa.c/.h` are the Waveguide engine's, unchanged.
 
 **Note for listening to the samples:** `samples/*.wav` contain only the *added* sound. In the car the B47's own
 sound is underneath (its order 2, combustion clatter, tyre and wind noise), so the renders will sound thinner and
@@ -21,12 +20,12 @@ more "tonal" than the result in the cabin.
 ```
 make host            # build/es-synth-host
 ./test.sh            # internal checks, renders samples/, spectral checks, benchmark
-make car             # zig cc -target x86_64-linux-gnu.2.27, loader /lib/ld-linux-x86-64.so.2 -> ../tool/lfb-enginesound/es-synth
+make car             # zig cc -target x86_64-linux-gnu.2.27, loader /lib/ld-linux-x86-64.so.2 -> ../../tool/lfb-enginesound/es-synth-bass
 ./render_all.sh      # samples/{i6,v8,v10,v12}.wav: 40 s mono demo drives
 ```
 
 The command line and the stdin protocol are those of `PROTOCOL.md` (`P/E/T/V/M/S/X/Q`, `--out alsa:|wav:|raw`,
-`--demo`, `--script`, `--tone`, `--info`, `--bench`). Differences for D:
+`--demo`, `--script`, `--tone`, `--info`, `--bench`). Differences for this engine:
 
 * `P <rpm> ...` carries the B47's **real** rpm (idle about 800, max about 4800-5000). The app does not map it.
   `--info` reports idle 800 / redline 5000 for every preset, with cylinders 6 / 8 / 6 / 6.
@@ -72,7 +71,7 @@ gain tables (rpm x load, dB) -> 12 ms up / 50 ms down -> order bank  sum_k g_k s
   (`lp_lo` / `lp_hi`: 140 Hz off the gas, 185-200 Hz at full load). This is exact per order, with no filter phase,
   and comes on top of the tables. The tables give the lowest orders the weight: 1.5 and 3 for the six-cylinder
   presets, with order 1 joining from about 2000 rpm, and 1 / 3 / 4 for the V8. The roll-off moves the energy down
-  as the rpm rises. So D is mostly 30-150 Hz at any rpm, spread over 2-3 orders, with the burble and irregularity
+  as the rpm rises. So it is mostly 30-150 Hz at any rpm, spread over 2-3 orders, with the burble and irregularity
   on them. A 4th-order 34 Hz high-pass and a 2nd-order low-pass at 2.2x the corner follow (the 34 Hz high-pass also
   removes the 20 Hz sidebands that the per-firing modulation puts under order 3 at idle). Any order under 42..32 Hz
   fades out: at 800 rpm order 1.5 is 20 Hz and order 1 is 13 Hz, so order 3, at 40 Hz, is the lowest left. Engine
@@ -91,14 +90,13 @@ gain tables (rpm x load, dB) -> 12 ms up / 50 ms down -> order bank  sum_k g_k s
     smaller above 2500 rpm. This is the V6 TDI burble.
   - A small common phase jitter (about 0.01 shaft rad, about 10 Hz wide, scaled by order).
   - Only a trace of noise. Noise rides on the firing pulses only under real load (it fades in from load 0.35 to
-    0.9). It is band-passed at 80-250 Hz and low-passed at 200 Hz, 60-90 dB under the orders. It is **exactly zero** at idle, cruise and coasting. Version 1 had about 22 dB more of it, band-passed
-    up to 900 Hz and always on; in the car that was heard as a permanent hiss.
+    0.9). It is band-passed at 80-250 Hz and low-passed at 200 Hz, 60-90 dB under the orders. It is **exactly zero** at idle, cruise and coasting (no permanent hiss).
   - Mild load definition. The roll-off corner moves from 140 to 185-200 Hz with load. At 2500 rpm the 120-400 Hz
     share rises from load 0.05 to 1 by 7-14 points (for example 49 % -> 57 %).
 * **Cabin.** A 120 Hz bass shelf (preset +1..+2.5 dB, `X bass` +-9 dB). Gears 7 / 8 at low load get -2 dB (cruise). Idle is 1 dB quieter than the rest of the off-gas range.
 * **Boost proxy.** There is no boost telemetry. The proxy is `sstep(0.6, 0.95, load) x sstep(1600, 2600 rpm)`
   (500 ms up, 300 ms down), plus the time spent near full load (load > 0.8, > 1700 rpm).
-* **Turbo** is **off in D's own default**: `turbo_default` is false, and `E` switches it off. With `T 1` it is a
+* **Turbo** is **off in this engine's own default**: `turbo_default` is false, and `E` switches it off. With `T 1` it is a
   faint *tonal* whistle (a sine at 2.3-3.8 kHz with a slow ±0.4 % wander, no noise band). It fades in only at high
   boost (proxy 0.55..0.95) and sits about 35-38 dB under the engine at full load. It is zero at idle, cruise and
   coasting.
@@ -110,7 +108,7 @@ gain tables (rpm x load, dB) -> 12 ms up / 50 ms down -> order bank  sum_k g_k s
   lift fires it: pedal < 5 %, torque negative for 60 ms, > 1300 rpm, > 10 km/h, not within 0.4 s of a shift. It
   opens a window of 0.6-1.3 s. During the window, events fall on firing slots at a decaying rate (6 per second x
   pops scale), at least 90 ms apart. Each event is a damped 85-155 Hz sine thump (3 ms rise, ~28 ms decay) with a
-  little amplitude roughness, low-passed at 300 Hz. There is no crackle band any more. Nothing fires during a continuous descent, a shift or a torque oscillation (re-arming
+  little amplitude roughness, low-passed at 300 Hz, no crackle band. Nothing fires during a continuous descent, a shift or a torque oscillation (re-arming
   needs load > 0.25 again).
 * **Output.** Volume (50 ms), gate (mute, Q, no `P` for 1.5 s; 40 ms fade), preset crossfade (80 ms; the order bank
   is shared, so only the gains move) and a soft ceiling at -3 dBFS. Then comes `protect.h` (30 Hz HP, bass
@@ -121,7 +119,7 @@ gain tables (rpm x load, dB) -> 12 ms up / 50 ms down -> order bank  sum_k g_k s
 | X | effect |
 |---|---|
 | `offgas` | the off-gas end of the tables (idle, light cruise, coasting): 0..1 scales it (`20 log10(offgas)` dB, 0 = silent), 1..2 moves it towards the full-load table (2 = as loud as full load). Full load is unchanged |
-| `turbo` | the tonal whistle's level when `T 1` (0 = none; D's default is `T 0`) |
+| `turbo` | the tonal whistle's level when `T 1` (0 = none; this engine's default is `T 0`) |
 | `bov` | recirculation sigh level (0 = none; only after real boost, see above) |
 | `pops` | overrun burble rate, window length and level (0 = none, 2 = more often and louder) |
 | `bass` | 120 Hz shelf, `9 (bass - 1)` dB on top of the preset's own. `X bass 2` drives the band under 100 Hz into the protection's -8 dBFS bass limiter (i6 / v10 / v12; v8 stays at about -10 dBFS) |
@@ -152,7 +150,7 @@ load). These are design targets, not recovered factory calibrations.
 * `i6`: smooth and deep. Order 3 carries it, 1.5 and (higher up) 1 add depth underneath, and a little 6 adds
   definition.
 * `v8`: orders 4 / 3 / 1, the deep rumble of the uneven per-bank firing.
-* `v10`: the burble, the owner's main wish. Order 1.5 is nearly as strong as 3, with 4.5 under them, all lumping
+* `v10`: the burble. Order 1.5 is nearly as strong as 3, with 4.5 under them, all lumping
   slowly. It grows on the overrun.
 * `v12`: the same V6 TDI with more half orders, a deeper lump, a little more definition under load, and more pops.
 
@@ -172,32 +170,18 @@ load). These are design targets, not recovered factory calibrations.
 | 2000 rpm full load, under 100 Hz peak: bass 1 / bass 2 | -11.3 / -7.7 dBFS (limits) | -15.4 / -9.8 dBFS | -9.0 / -7.6 dBFS (limits) | -10.0 / -7.4 dBFS (limits) |
 | `--bench 60`, x realtime (varies run to run) | 860 | 823 | 763 | 764 |
 
-### Band split: before / after (version 3 -> version 4, "more bassy")
+Energy shares of the demo drive (whole 40 s) for 30-60 / 60-120 / 120-250 / >250 Hz are in the table above; the V8
+keeps the most 120-250 Hz, because its order 4 is 133 Hz at 2000 rpm. For v10: 2000 rpm / load 0.2
+48 / 46 / 5 / 0 %, 3500 rpm full load 27 / 49 / 24 / 0.6 %, coasting at 2500 rpm 9 / 69 / 22 / 0 %.
 
-These are the demo drive's energy shares (whole 40 s, FFT) for the bands 30-60 / 60-120 / 120-250 / >250 Hz.
-
-| | version 3 | version 4 |
-|---|---|---|
-| i6 | 0.3 / 38.6 / 55.7 / 5.5 % | 21.8 / 56.3 / 21.8 / 0.1 % |
-| v8 | 0.5 / 1.8 / 85.7 / 12.0 % | 31.0 / 31.5 / 37.0 / 0.5 % |
-| v10 | 8.3 / 39.7 / 48.6 / 3.4 % | 30.0 / 52.8 / 17.1 / 0.1 % |
-| v12 | 10.9 / 35.8 / 48.6 / 4.8 % | 30.8 / 50.7 / 18.2 / 0.2 % |
-
-Steady states, version 3 -> version 4, for v10:
-* 2000 rpm / load 0.2: 14.8 / 74.1 / 10.7 / 0.3 % -> 48.2 / 46.4 / 5.4 / 0.0 %.
-* 3500 rpm full load: 0.1 / 7.3 / 81.1 / 11.4 % -> 26.7 / 48.6 / 24.2 / 0.6 %.
-* Coasting at 2500 rpm: 0.5 / 31.4 / 66.7 / 1.4 % -> 9.4 / 68.5 / 22.0 / 0.0 %.
-
-The V8 keeps the most 120-250 Hz, because its order 4 is 133 Hz at 2000 rpm.
-
-* Off-gas against full load is about 4 dB (3-5.5 dB from 800 to 4300 rpm) in every preset (version 2: 7.6-9 dB).
+* Off-gas against full load is about 4 dB (3-5.5 dB from 800 to 4300 rpm) in every preset.
   check.py requires 3-5 dB at 2500 rpm, a lift within 2 dB after 100 ms, and a tip-in within 100 ms.
 * Rpm step 1500 -> 3000: 90 % after 23.3 ms, no overshoot. A 50 Hz telemetry ramp of -4000 rpm/s (ZF upshift):
   69 rpm tracking error (17 ms) and 4 rpm undershoot when the ramp stops.
 * Gear changes: the same drives with and without `S` lines (full-load upshift, overrun upshift, coasting
   downshift) differ by 0.00 dB. The five demo upshifts stay within 3 dB of the levels around them.
 * `X`: with `T 1` the whistle raises the 2-7 kHz band by 50 dB at full load. The default (`T 0`) and `X turbo 0`
-  leave nothing there. After a lift, the non-tonal 0.3-1.5 kHz band in the first 170 ms rises about 25 dB with the sigh (D has
+  leave nothing there. After a lift, the non-tonal 0.3-1.5 kHz band in the first 170 ms rises about 25 dB with the sigh (this engine has
   almost nothing there otherwise). The non-tonal 60-700 Hz band over 0.68 s rises 1.5 dB with pops 2. `bass` 0 / 1
   / 2 moves the 30-80 Hz vs 150-400 Hz balance by about 6-7 dB per step. `offgas
   0.5` gives -6.0 dB off the gas and 0.0 dB at full load; `offgas 2` makes off-gas as loud as full load (-0.1..-0.2 dB). `X pops/bov/turbo 0` remove those layers exactly, and `T 0`
@@ -206,30 +190,30 @@ The V8 keeps the most 120-250 Hz, because its order 4 is 133 Hz at 2000 rpm.
   -0.5), with every layer at its maximum (`T 1`, `X turbo/bov/pops 2`). Energy above 1.5 kHz is 71-79 dB under the
   total; check.py requires at least 35. Non-tonal energy above 500 Hz is 57-61 dB under the total; check.py requires
   at least 50. test_core asserts that the pulse noise, whistle, sigh and pops are exactly 0 there.
-* Clicks: A's slope-outlier detector finds none in the samples, the transition script (preset switching every
+* Clicks: the Waveguide engine's slope-outlier detector finds none in the samples, the transition script (preset switching every
   50 ms, all `X` changes, mute, shifts, malformed lines) or the lift renders.
 
-### Noise and hiss: before / after (version 1 -> version 2, the owner heard "a lot of hiss")
+### Noise and hiss
 
-These come from layer-isolated builds (`cc -DES_LAYERS=<mask>`: 1 pulse noise, 2 turbo, 4 sigh, 8 pops, 16
-jitter, 32 orders). Each value is the layer's added non-tonal energy (or its energy above 1.5 kHz), in dB under the
-total. The ranges cover all four presets, with the defaults of each version.
+Measured with layer-isolated builds (`cc -DES_LAYERS=<mask>`: 1 pulse noise, 2 turbo, 4 sigh, 8 pops, 16 jitter,
+32 orders), all four presets, defaults; each value is the layer's added non-tonal energy (or its energy above
+1.5 kHz) under the total:
 
-| layer | version 1 (defaults) | version 2 (defaults) |
-|---|---|---|
-| turbo whistle (noise band 1.9-4.5 kHz + hiss) | cruise -45..-49 dB, full load -30..-33 dB (all of it above 1.5 kHz) | off (`T 0`). With `T 1`: a sine, -35..-38 dB at full load only, nothing at cruise / coast / idle |
-| pulse noise | -41..-47 dB at every load point (-43..-54 dB above 500 Hz), including idle and cruise | 0 at idle / cruise / coast; at full load at least -68 dB (-73..-94 dB above 500 Hz) |
-| recirculation sigh | after any lift with spool > 0.35, ~0.3 s, up to 1.75 kHz, -39..-41 dB in the lift window | after ≥ 0.5 s near full load only, ~200 ms, < 1.2 kHz, 24-28 dB under the engine |
-| pops | noise thump + 1.3 kHz crackle, -14..-29 dB in the lift window, up to -31 dB above 1.5 kHz | sine thump, -22..-29 dB in the lift window, -64..-75 dB above 1.5 kHz |
-| phase jitter | ~70 Hz wide: -27..-34 dB of skirts around the lines | ~10 Hz wide: -28..-46 dB of low skirts, -42..-62 dB above 500 Hz |
-| **total above 1.5 kHz**: idle / cruise / coast / full load | -69..-71 / -45..-49 / -74..-75 / -30..-33 dB | -71..-73 / -78..-79 / -75..-77 / -78..-81 dB |
+| layer | |
+|---|---|
+| turbo whistle | off (`T 0`). With `T 1`: a sine, -35..-38 dB at full load only, nothing at cruise / coast / idle |
+| pulse noise | 0 at idle / cruise / coast; at full load at least -68 dB (-73..-94 dB above 500 Hz) |
+| recirculation sigh | after >= 0.5 s near full load only, ~200 ms, < 1.2 kHz, 24-28 dB under the engine |
+| pops | sine thump, -22..-29 dB in the lift window, -64..-75 dB above 1.5 kHz |
+| phase jitter | ~10 Hz wide: -28..-46 dB of low skirts, -42..-62 dB above 500 Hz |
+| **total above 1.5 kHz**: idle / cruise / coast / full load | -71..-73 / -78..-79 / -75..-77 / -78..-81 dB |
 
 What is left of the "non-tonal" energy (-17..-34 dB) is the burble itself: the per-firing irregularity and the
 half-order lump. It lies around the order lines below 500 Hz and is not hiss.
 
 ## Sources
 
-The research report `research4/REPORT.md` (16 Nov 2026) and the sources it cites:
+The design follows these sources:
 
 * BMW technical information on ASD (actual engine sound supplemented with DSP-generated elements from vehicle data):
   press.bmwgroup.com T0054613EN p.36; BMW training ST1204 (F10 ASD), ST1856, ST1915 (ASD in the RAM, coupled to
@@ -254,7 +238,7 @@ The research report `research4/REPORT.md` (16 Nov 2026) and the sources it cites
 * No phase lock to the real crank. The added orders cannot reinforce or cancel the B47 coherently. The V8's small
   order 2 may beat slowly against the real one; it can be set to 0 in `presets.c`.
 * The recirculation sigh (0.6-1.1 kHz, about 25 dB under the engine, after a full-load lift only) is now the
-  only thing D adds above 250 Hz. Set `X bov 0` if it sticks out over the bass layer.
+  only thing this engine adds above 250 Hz. Set `X bov 0` if it sticks out over the bass layer.
 * Every non-order layer is now nearly silent. If the cabin sounds too "clean" or organ-like, raise `am_rand` /
   `wobble` in `presets.c` (irregularity and burble), not the noise.
 * Turbo whistle, sigh and pops are stylised approximations (no boost or turbo-speed telemetry). The B47's fuel-cut

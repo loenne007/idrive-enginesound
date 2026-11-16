@@ -1,12 +1,29 @@
 # Sound engine protocol
 
-Every sound engine (`synth/<id>/`, binary `es-synth-<id>`) has the same command line (see `synth/waveguide/README.md`:
-`--out alsa:/wav:/raw`, `--demo`, `--script`, `--tone`, `--info`, `--bench`) and reads the same control lines on
-stdin, one per line, typically 20-100 a second. Malformed lines are ignored; nothing may block the audio.
+Every sound engine (`synth/<id>/`, binary `es-synth-<id>`: `pulse`, `waveguide`, `bass`) has the same command line
+and reads the same control lines; the service (`tool/lfb-enginesound/esd.js`) runs the chosen one.
+
+## Command line
+
+```
+es-synth-<id> --out alsa:<PCM>|wav:<file>|raw [--preset i6|v8|v10|v12] [--volume 0..1] [--demo <seconds>|--script <file>]
+es-synth-<id> --tone alsa:<PCM>      # routing test: 10 s of soft 880 Hz beeps
+es-synth-<id> --info                 # JSON: sample_rate, presets (id, idle, redline, cylinders, turbo_default)
+es-synth-<id> --bench <seconds>      # render speed per preset
+```
+
+e.g. `es-synth-pulse --out alsa:plug:smartx:CarLifeMedia_CF_48_STEREO --preset v8` in the car, or
+`synth/pulse/build/es-synth-host --out wav:v8.wav --demo 40 --preset v8` on a computer. Output: 48 kHz S16LE stereo
+(identical channels). Logs go to stderr. A script has one `<seconds> <control line>` per line, in order (see
+`synth/waveguide/README.md`). `ES_ALSA_US` sets the ALSA buffer (default 64000 us).
+
+## Control lines
+
+On stdin, one per line, typically 20-100 a second. Malformed lines are ignored; nothing may block the audio.
 
 | Line | |
 |---|---|
-| `P <rpm> <load> <throttle> <gear> <speed>` | the engine's rpm (already mapped to the preset's range), load -1..1 (negative = overrun), throttle 0..1, gear (-1 R, 0 N/P, 1..10), km/h |
+| `P <rpm> <load> <throttle> <gear> <speed>` | the engine's rpm (mapped to the preset's range by the app; `bass` gets the car's real rpm), load -1..1 (negative = overrun), throttle 0..1, gear (-1 R, 0 N/P, 1..10), km/h |
 | `E <preset>` | `i6`, `v8`, `v10`, `v12`; crossfade, no clicks |
 | `T 0\|1` | the turbo layer off / on |
 | `V <0..1>` | master volume |
