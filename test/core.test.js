@@ -15,7 +15,7 @@ function make(over) {
     let t = 1000;
     const daemon = { send: (l) => sent.push(l), shm: null };
     const core = new Core({
-        settings: { get: (k) => vals[k] },
+        settings: { get: (k) => vals[k], set: (k, v) => { vals[k] = v; core.onSetting(k); } },
         log: { info() {}, warn() {} },
         daemon,
         route: { connect: (r) => { routed.push(['connect', r.source]); return Promise.resolve(true); }, disconnect: () => { routed.push(['disconnect']); return Promise.resolve(); }, error: null },
@@ -47,6 +47,26 @@ function make(over) {
     const w = make({ soundEngine: 'waveguide', engine: 'v10' }).core;
     assert.strictEqual(w.presetInfo('v10').title, 'V10');
     assert(w.virtualRpm(2345) > 2345);
+}
+// the main page's five sounds, in the owner's order: three of Simulate, two of Enhance; choosing one sets the sound
+// engine and its preset; a legacy combination is none of them
+{
+    const { core, vals, sent } = make({ engine: 'i6' });
+    assert.deepStrictEqual(core.sounds().map((x) => x.title + ' / ' + x.kind), ['Inline 6 / Simulate', 'V8 / Simulate', 'V12 / Simulate', 'Inline 6 Diesel / Enhance', 'V8 TDI / Enhance']);
+    assert.deepStrictEqual(core.sounds().filter((x) => x.selected).map((x) => x.id), ['i6']);
+    core.setSound('v8d');
+    assert.deepStrictEqual([vals.engine, vals.soundEngine], ['v8', 'enhance']);
+    assert(sent.indexOf('E v8') >= 0 && sent.indexOf('E v8') < sent.indexOf('ENGINE enhance'), 'the preset first, then the sound engine: ' + sent);
+    assert.deepStrictEqual(core.sounds().filter((x) => x.selected).map((x) => x.id), ['v8d']);
+    assert.strictEqual(core.virtualRpm(2345), 2345);
+    core.setSound('v12');
+    assert.deepStrictEqual([vals.engine, vals.soundEngine], ['v12', 'simulate']);
+    core.setSound('nope');
+    assert.deepStrictEqual([vals.engine, vals.soundEngine], ['v12', 'simulate']);
+    assert.strictEqual(make({ engine: 'v10' }).core.sounds().filter((x) => x.selected).length, 0);
+    assert.strictEqual(make({ soundEngine: 'waveguide', engine: 'i6' }).core.sounds().filter((x) => x.selected).length, 0);
+    assert.strictEqual(make().core.legacy(), false);
+    assert.strictEqual(make({ legacyEngines: true }).core.legacy(), true);
 }
 // sound engines: Simulate (default) and Enhance, the legacy Waveguide and Replica behind the legacyEngines setting;
 // ids saved by earlier versions map to the current ones (app.json "aliases" agrees)

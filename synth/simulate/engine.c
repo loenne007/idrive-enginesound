@@ -236,7 +236,7 @@ static float bp_norm(float hz, float q) {
  * ------------------------------------------------------------------------------------------------------------- */
 #define OFFGAS_AMP .60f /* off the throttle (idle, coast, light load): -4.4 dB against full load at offgas 1 */
 #define TURBO_K .0009f   /* turbo at full boost: ~-40 dB under the engine, a faint whistle (set by measurement) */
-#define BOV_K .016f     /* recirculation whoosh peak: ~-14 dB under the full-load engine (CAL_LEVEL) */
+#define BOV_K .0125f    /* recirculation whoosh peak: ~-16 dB under the full-load engine (CAL_LEVEL) */
 #ifndef POP_K
 #define POP_K 3.6f
 #endif

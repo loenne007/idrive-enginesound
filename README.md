@@ -1,9 +1,9 @@
 # Engine Sound for iDrive 7
 
 A synthesized engine sound on your BMW's speakers, driven live by the car's **real rpm, gear and engine load**.
-Pick an **inline-6** (B58 / S58 style), a cross-plane **V8**, a high-revving **V10** or a **V12**, or let the
-**Enhance** sound engine give the car's own diesel the depth of a big six or V8 TDI. The sound is generated in real time
-on the head unit, not played back from recordings.
+Five sounds: an **Inline 6** (B58 / S58 style), a cross-plane **V8** and a **V12**, each a whole synthesized engine,
+and **Inline 6 Diesel** and **V8 TDI**, which give the car's own diesel the depth of a big six or V8 TDI. The sound
+is generated in real time on the head unit, not played back from recordings.
 
 Made for the BMW iDrive 7 head unit (MGU), installed through the [MGU Store](https://github.com/robertnisipeanu/mgu-store).
 Developed for a G20 320d (B47 diesel, ZF 8HP).
@@ -17,8 +17,7 @@ Developed for a G20 320d (B47 diesel, ZF 8HP).
 1. In the MGU Store: **Settings → Add source**, type `loenne007/idrive-enginesound`, choose the branch **main**.
 2. Install **Engine Sound**. The Store installs its service (**Engine Sound service**, `lfb-enginesound`) with it.
 3. Restart the head unit when the Store asks (the service starts at the next start).
-4. Start the engine. The app starts with the head unit; open its tile to pick the engine, the sound engine and the
-   audio route.
+4. Start the engine. The app starts with the head unit; open its tile to pick the sound.
 
 Updating keeps your settings: the sound engine chosen in an earlier version (`a` / `b` / `c` / `d`, `pulse` / `bass`)
 becomes Waveguide / Replica / Simulate / Enhance, Simulate / Enhance.
@@ -33,9 +32,11 @@ becomes Waveguide / Replica / Simulate / Enhance, Simulate / Enhance.
                                                                                 ALSA → SmartX → car speakers
 ```
 
-- **rpm**: the diesel's idle-to-max range (about 800–4800 rpm) is stretched over the chosen engine's idle-to-redline
-  range, so a V10 really screams at the top. *Settings → Rev range → The car's real rpm* turns that off; the Bass
-  sound engine always gets the real rpm.
+- **rpm**: the car sends its engine speed only 10–20 times a second; the app estimates it in between, so the sound
+  neither steps nor trails. The engine's rpm is the car's times a fixed ratio per preset (*Rev range → locked*) that
+  puts its firing order on a harmonic of the car's own four-cylinder, so the two blend at every rpm. *Scaled*
+  stretches the diesel's idle-to-max range over the engine's idle-to-redline range instead; *real* passes the car's
+  rpm on. Enhance always gets the real rpm.
 - **load**: crankshaft torque against the car's max torque (*Car's max torque*, 400 Nm for a 320d). Pulling hard
   makes it louder and harder-edged; negative torque (engine braking) gives the overrun character.
 - **gear**: a gear change of the automatic (ZF 8HP) is sent to the synth (shift character, no ignition cut).
@@ -44,30 +45,36 @@ becomes Waveguide / Replica / Simulate / Enhance, Simulate / Enhance.
 
 ## Sound engines
 
-Four synthesizers ("sound engines") are installed side by side; each plays all four presets. Pick one on the
-Engine page or in *Settings → Sound engine*. **Simulate** and **Enhance** are the two to use; the older **Waveguide**
-and **Replica** are offered only with *Settings → Legacy sound engines*.
+Four synthesizers ("sound engines") are installed side by side; each plays four presets. The app's five sounds are
+**Simulate**'s i6, v8 and v12 and **Enhance**'s i6 and v8. With *Settings → Legacy* the page offers every sound
+engine and preset, the older **Waveguide** and **Replica** included.
 
 | Id | Title | |
 |---|---|---|
 | `simulate` | **Simulate** (default) | Light and quick. Per cylinder an exhaust and an intake pressure pulse at its crank angle, with the load's rasp riding on each pulse, through quarter-wave pipes, a collector and muffler chambers; an explicit level map (off the gas about 4 dB under full load). Follows a step in rpm within ~26 ms, runs at 300x+ realtime. [synth/simulate](synth/simulate/README.md) |
 | `waveguide` | **Waveguide** (legacy) | Engine_Sim's sound path rewritten in C: combustion events into delay-line waveguide pipes, muffler, Helmholtz airbox, a sub layer, a turbo layer, cabin filter, small room and three-band dynamics. Fuller and darker. [synth/waveguide](synth/waveguide/README.md) |
 | `replica` | **Replica** (legacy) | The Engine_Sim website's sound engine ported 1:1 to C (its Web Audio nodes rebuilt as Chrome runs them), driven by the car's data, with automatic-gearbox shifts and a quiet turbo. The heaviest on the CPU (~35x realtime on a Mac). [synth/replica](synth/replica/README.md) |
-| `enhance` | **Enhance** | An Active Sound Design emulation: it does not play a foreign engine but adds rpm-locked low engine orders (mostly 30–150 Hz) under the car's own diesel, from the **real** rpm. Its presets are diesel characters: **B57 straight-6** (i6), **V8 TDI** (v8), **V6 TDI** (v10), **V6 TDI Sport** (v12). [synth/enhance](synth/enhance/README.md) |
+| `enhance` | **Enhance** | An Active Sound Design emulation: it does not play a foreign engine but adds rpm-locked low engine orders (mostly 30–150 Hz) under the car's own diesel, from the **real** rpm. Its presets are diesel characters: **Inline 6 Diesel** (i6, B57 style), **V8 TDI** (v8), **V6 TDI** (v10), **V6 TDI Sport** (v12). [synth/enhance](synth/enhance/README.md) |
 
 Each is a folder `synth/<id>/` with its own C source, tests and sample renders (`samples/*.wav`, 40 s demo drives),
 built into `tool/lfb-enginesound/es-synth-<id>`. All share one command line and control protocol
 ([synth/PROTOCOL.md](synth/PROTOCOL.md)).
 
-## Pages
+## The page
 
-- **Engine**: playing / standby and why, the sound engine, the audio mode (tap: over the music / instead of it),
-  on / off and **Test sound** (10 s of beeps through the route the engine plays on, also with the engine off); live
-  car rpm, the engine's rpm, load, gear and speed; the preset.
+Left: playing / standby and why, on / off, **Test sound** (10 s of beeps through the route the engine plays on, also
+with the engine off) and the audio mode (tap: over the music / instead of it). Middle: live car rpm, the engine's
+rpm, load, gear and speed. Right: the five sounds.
+
+With *Settings → Legacy: all engines, Sound and Audio pages* the page offers the sound engine and its four presets
+instead of the five sounds, and two more pages show:
+
 - **Sound**: sliders (0–200 %, 100 % = the sound engine's own default) for **Off the gas** (idle, coasting, light
-  load), **Turbo**, **Blow-off**, **Pops & bangs** and **Bass**; **Reset all**. Also in Settings. Whatever they are
-  set to, the speaker protection (below) keeps the output safe.
-- **Audio**: the audio route (below), its state, and the mix route candidates with a test each.
+  load), **Turbo**, **Blow-off**, **Pops & bangs** and **Bass**; **Reset all**. The same values are in Settings,
+  with or without Legacy. Whatever they are set to, the speaker protection (below) keeps the output safe.
+- **Audio**: the audio route (below), its state, the mix route candidates with a test each, and **Diagnose**: a
+  report of the car's audio sources, sinks, connections and SmartX files (also written to `audio-report.txt` in the
+  app's data folder).
 
 ## Audio: exclusive or mix
 
@@ -76,7 +83,7 @@ built into `tool/lfb-enginesound/es-synth-<id>`. All share one command line and 
 [Moonride](https://github.com/JustAnotherPU/moonride) uses on iDrive 7. The music pauses while the engine plays and
 comes back a few seconds after it stops.
 
-**Mix** (*Play over music (mix)*, on the Audio page or in Settings): the engine plays over the music, as a
+**Mix** (*Play over music (mix)* in Settings, or the audio mode button on the page): the engine plays over the music, as a
 navigation prompt does (the car decides whether it mixes or ducks the music). The default mix route is the
 AudioManager source `OAPGenericOverlay` (1048) to the main speakers (1024); its SmartX endpoint is found by name in
 the service's list of SmartX shared-memory files (`/dev/shm`), falling back to
@@ -84,7 +91,7 @@ the service's list of SmartX shared-memory files (`/dev/shm`), falling back to
 
 Mix is new and not yet confirmed in the car. To find a route that works:
 
-1. Open the **Audio** page. It reads the AudioManager's sources and the SmartX endpoints (**Refresh** reads them
+1. Switch *Settings → Legacy* on and open the **Audio** page. It reads the AudioManager's sources and the SmartX endpoints (**Refresh** reads them
    again) and lists the **mix candidates**: the default, and every source whose name sounds like a prompt
    (Overlay, Interrupt, Navi, TTS, Announcement, Speech, Prompt, Chime) and that has a SmartX endpoint.
 2. Play some music, then press **Test** on a candidate: 10 s of beeps through that route. If you hear the beeps
@@ -109,9 +116,9 @@ below ~150 Hz held under -3 dBFS, the long-term power held under -8 dBFS RMS (lo
 | Setting | |
 |---|---|
 | Engine sound | on / off (also the **On / Off** button) |
-| Engine | inline-6, V8, V10, V12 (with Enhance: B57 straight-6, V8 TDI, V6 TDI, V6 TDI Sport) |
-| Sound engine | Simulate, Enhance (the legacy Waveguide, Replica with *Legacy sound engines*) |
-| Legacy sound engines | offers Waveguide and Replica too |
+| Engine | the sound engine's preset: Inline 6, V8, V10, V12 (with Enhance: Inline 6 Diesel, V8 TDI, V6 TDI, V6 TDI Sport) |
+| Sound engine | Simulate, Enhance, and the legacy Waveguide, Replica |
+| Legacy: all engines, Sound and Audio pages | the page offers every sound engine and preset instead of the five sounds; the Sound and Audio pages show |
 | Volume | 10–100 %, default 50 %; the car's own volume knob applies on top. 50 % is the 90 % of versions before 1.1 (plus the 6 dB above), 100 % about 4 dB more |
 | Only in Sport mode | plays only while the driving mode is Sport |
 | Play over music (mix) | the mix route instead of the exclusive one (above) |

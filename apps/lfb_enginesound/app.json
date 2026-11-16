@@ -2,7 +2,7 @@
   "id": "lfb_enginesound",
   "title": "Engine Sound",
   "description": "A synthesized engine sound (inline-6, V8, V10, V12, or bass for the diesel) on the car's speakers, following the car's real rpm, gear and load; exclusive or over the music",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "vendor": "loenne007",
   "license": "MIT",
   "loggingId": "LFES",
@@ -12,7 +12,7 @@
   ],
   "autostart": true,
   "requires": {
-    "lfb-enginesound": "1.1.0"
+    "lfb-enginesound": "1.2.0"
   },
   "signals": {
     "de.bmw.infotainment.vehicle.CDS": {
@@ -88,7 +88,7 @@
       "options": [
         [
           "i6",
-          "Inline-6 (B58 / S58 style)"
+          "Inline 6 (B58 / S58 style)"
         ],
         [
           "v8",
@@ -138,7 +138,7 @@
     },
     {
       "key": "legacyEngines",
-      "label": "Legacy sound engines",
+      "label": "Legacy: all engines, Sound and Audio pages",
       "type": "bool",
       "default": false
     },

@@ -249,6 +249,7 @@ The design follows these sources:
 
 ## Level against rpm
 
-On top of the order tables a per-preset trim (`GROW` in synth.c) lets the level keep rising to the top of the rev
-range: full load in the car's chain (live gain 6 dB, volume 0.9) goes from about -13 dBFS RMS at idle to -9 at
-4500 rpm for i6 and v8, just under the speaker protection's limits. The timbre (the order balance) is unchanged.
+The order tables set the level against rpm. A per-preset trim on top (`GROW` in synth.c) gives the V8 TDI 1 dB more
+at the top of the rev range (full load at 4300 rpm: -8.1 dBFS RMS in the car's chain, live gain 6 dB, volume 0.9);
+the i6 is already at the speaker protection's limits there. The low and middle revs are not lowered to make the top
+seem louder: a version that did lost the burble.

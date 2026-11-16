@@ -150,8 +150,8 @@ for name in ids:
     # D is a bass enhancer that stays inside the speaker protection without leaning on it: the band under 100 Hz
     # (the protection's detector) peaks at -11..-9 dBFS (limit -8), the 3 s RMS stays under -15 dBFS (limit -14)
     bp = bass_peak(a)
-    # (in the car the live gain adds 6 dB: -13..-9 here is -7..-3 there, at or under the protection's -3 dBFS)
-    assert -13 <= db(bp) <= -9, (name, 'bass band peak: headroom under the protection limit', db(bp))
+    # (in the car the live gain adds 6 dB: -11.5..-9 here is -5.5..-3 there, at or under the protection's -3 dBFS)
+    assert -11.5 <= db(bp) <= -9, (name, 'bass band peak: headroom under the protection limit', db(bp))
     cs = [0.]
     for x in a: cs.append(cs[-1] + x * x)
     rms3 = max(cs[i + 3 * SR] - cs[i] for i in range(0, len(a) - 3 * SR, 4800)) / (3 * SR)
@@ -165,8 +165,8 @@ for name in ids:
             band[j] += energy(s, lo, hi)
     tot = sum(band)
     band = [100 * b / tot for b in band]
-    # (above 250 Hz: only the recirculation sigh; its share grew a little when the low revs gave way)
-    assert band[0] < .03 and band[4] < 2.5 and band[1] + band[2] > 60, (name, 'band split', band)
+    # (above 250 Hz: the top orders at the top of the rev range; the V8 TDI's 1 dB more up there shows here)
+    assert band[0] < .03 and band[4] < 2 and band[1] + band[2] > 60, (name, 'band split', band)
     sub = band[0] / 100
     ratio = clicks(a, name)
     # demo upshifts (rpm falls ~1200-1450 over 350 ms): no gap or onset beyond the settled levels around them

@@ -6,9 +6,10 @@
  * The app runs from the platform's start (app.json "autostart"): background() reads the car, drives the synthesizer
  * service (tool lfb-enginesound, see core.js / daemon.js) and the car's audio routing (route.js), with the app closed.
  *
- * Pages: Engine (what plays and why or why not, the car's rpm and the engine's, gear, load; the engine and the sound
- * engine, volume, on / off, a 10 s test sound), Sound (the sound sliders) and Audio (the audio route: exclusive, the
- * music pauses, or mix, over the music; the mix route candidates with a test each).
+ * One page: what plays and why or why not, on / off, a 10 s test sound, the audio mode; the car's rpm and the
+ * engine's, gear, load; and the five sounds to choose from (core.js SOUNDS). With Settings > Legacy the page offers
+ * every sound engine and preset instead, and two more pages show: Sound (the sound sliders) and Audio (the audio
+ * route: exclusive, the music pauses, or mix, over the music; the mix route candidates with a test each; a report).
  */
 const fs = require('fs');
 const path = require('path');
@@ -16,7 +17,7 @@ const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
 const { withAlpha } = require('./kit/canvas');
 const Car = require('./kit/car');
-const { Core, ORDER, SOUND_SETTINGS } = require('./core');
+const { Core, ORDER, SOUNDS, SOUND_SETTINGS } = require('./core');
 const { Daemon } = require('./daemon');
 const { Route, MIX_DEFAULT, mixCandidates, mixRoute, sameRoute } = require('./route');
 
@@ -144,7 +145,13 @@ mgu.run({
 
         ui.onClick('BTN_TOGGLE', () => { settings.set('enabled', settings.get('enabled') === false); return redraw(); });
         ui.onClick('BTN_TEST', () => { core.test(); return redraw(); });
-        ui.onClick('BTN_ENGINE', () => { const i = ORDER.indexOf(core.preset()); settings.set('engine', ORDER[(i + 1) % ORDER.length]); return redraw(); });
+        // the next sound (legacy: the next preset of the sound engine)
+        ui.onClick('BTN_ENGINE', () => {
+            if (core.legacy()) { const i = ORDER.indexOf(core.preset()); settings.set('engine', ORDER[(i + 1) % ORDER.length]); return redraw(); }
+            const i = core.sounds().findIndex((x) => x.selected);
+            core.setSound(SOUNDS[(i + 1) % SOUNDS.length].id);
+            return redraw();
+        });
 
         /* ---------- Engine page ---------- */
         function drawEngine(cv, t) {
@@ -160,31 +167,37 @@ mgu.run({
             cv.circle(84, 144, 12, col);
             cv.text(!on ? 'OFF' : down ? 'NO SERVICE' : failed ? 'NO SOUND' : why ? 'STANDBY' : 'PLAYING', 112, 138, 30, t.text, { font: 'bold', spacing: 2 });
             const line = down ? 'Restart the head unit once'
-                : failed ? 'Audio route failed (see Audio)'
+                : failed ? 'Audio route failed' + (core.legacy() ? ' (see Audio)' : '')
                     : !on ? 'Switched off' : why ? why.charAt(0).toUpperCase() + why.slice(1) : 'Following the engine';
             cv.text(line.slice(0, 40), 112, 168, 18, down || failed ? t.crit : t.dim);
 
-            // the sound engine: big tiles (the legacy ones only with Settings > Legacy sound engines)
-            const list = core.soundEngines(), se = core.soundEngine(), have = daemon.status && daemon.status.engines;
-            cv.text('SOUND ENGINE', 48, 222, 15, t.dim, { font: 'bold', spacing: 1.5 });
-            const tw = (472 - 10 * (list.length - 1)) / list.length;
-            list.forEach((x, i) => {
-                const tx = 48 + i * (tw + 10), sel = x.id === se, there = !have || have.indexOf(x.id) >= 0;
-                cv.roundRect(tx, 232, tw, 92, 14, sel ? withAlpha(t.accent, 0.3) : withAlpha('#ffffff', 0.05));
-                if (sel) cv.strokeRoundRect(tx, 232, tw, 92, 14, 2, t.accent);
-                cv.text(x.title, tx + tw / 2, 274, list.length > 2 ? 22 : 28, there ? t.text : t.dim, { align: 'center', font: 'bold' });
-                cv.text(x.short, tx + tw / 2, 304, 15, t.dim, { align: 'center' });
-                if (cv.own && there) cv.target(tx, 232, tw, 92, () => { settings.set('soundEngine', x.id); return redraw(); }, 'se-' + x.id);
-            });
-
+            const mix = core.mixOn(), testing = Date.now() < core.testUntil, legacy = core.legacy();
+            const onOff = (x, y, w, h) => G.button(cv, t, x, y, w, h, on ? 'Switch off' : 'Switch on', () => { settings.set('enabled', !on); return redraw(); }, { primary: !on, key: 'onoff' });
+            const test = (x, y, w, h) => G.button(cv, t, x, y, w, h, testing ? 'Listen...' : 'Test sound', () => { core.test(); return redraw(); }, { key: 'test', busy: testing });
             // the audio mode: tap to switch between mix and exclusive
-            const mix = core.mixOn();
-            G.button(cv, t, 48, 346, 472, 52, mix ? 'Audio: over the music' : 'Audio: instead of the music', () => { settings.set('mix', !mix); return redraw(); },
-                { key: 'mix' });
-
-            const testing = Date.now() < core.testUntil;
-            G.button(cv, t, 48, 420, 230, 60, on ? 'Switch off' : 'Switch on', () => { settings.set('enabled', !on); return redraw(); }, { primary: !on, key: 'onoff' });
-            G.button(cv, t, 290, 420, 230, 60, testing ? 'Listen...' : 'Test sound', () => { core.test(); return redraw(); }, { key: 'test', busy: testing });
+            const mode = (y, h) => G.button(cv, t, 48, y, 472, h, mix ? 'Audio: over the music' : 'Audio: instead of the music', () => { settings.set('mix', !mix); return redraw(); }, { key: 'mix' });
+            if (legacy) {
+                // the sound engine: big tiles
+                const list = core.soundEngines(), se = core.soundEngine(), have = daemon.status && daemon.status.engines;
+                cv.text('SOUND ENGINE', 48, 222, 15, t.dim, { font: 'bold', spacing: 1.5 });
+                const tw = (472 - 10 * (list.length - 1)) / list.length;
+                list.forEach((x, i) => {
+                    const tx = 48 + i * (tw + 10), sel = x.id === se, there = !have || have.indexOf(x.id) >= 0;
+                    cv.roundRect(tx, 232, tw, 92, 14, sel ? withAlpha(t.accent, 0.3) : withAlpha('#ffffff', 0.05));
+                    if (sel) cv.strokeRoundRect(tx, 232, tw, 92, 14, 2, t.accent);
+                    cv.text(x.title, tx + tw / 2, 274, list.length > 2 ? 22 : 28, there ? t.text : t.dim, { align: 'center', font: 'bold' });
+                    cv.text(x.short, tx + tw / 2, 304, 15, t.dim, { align: 'center' });
+                    if (cv.own && there) cv.target(tx, 232, tw, 92, () => { settings.set('soundEngine', x.id); return redraw(); }, 'se-' + x.id);
+                });
+                mode(346, 52);
+                onOff(48, 420, 230, 60); test(290, 420, 230, 60);
+            } else {
+                onOff(48, 210, 472, 76);
+                test(48, 302, 472, 60);
+                mode(378, 60);
+                const vol = Number(settings.get('volume')) || 50;
+                cv.text('Volume ' + vol + ' %' + (settings.get('sportOnly') === true ? ', only in Sport mode' : '') + ' (Settings)', 284, 478, 17, t.dim, { align: 'center' });
+            }
 
             // live
             G.panel(cv, t, 560, 44, 500, 468, 'Live');
@@ -211,7 +224,22 @@ mgu.run({
             cv.text('KM/H', 920, 480, 14, t.dim, { align: 'center', font: 'bold', spacing: 1.5 });
             if (d.demo) cv.text('DEMO DATA', 1030, 494, 16, t.warn, { align: 'right', font: 'bold' });
 
-            /* ---------- right: the engine preset ---------- */
+            /* ---------- right: the sound (legacy: the sound engine's presets) ---------- */
+            if (!legacy) {
+                G.panel(cv, t, 1076, 44, 500, 468, 'Sound');
+                const list = core.sounds();
+                list.forEach((x, i) => {
+                    // (a wider gap before the first Enhance sound)
+                    const y = 92 + i * 82 + (x.kind !== list[0].kind ? 10 : 0);
+                    cv.roundRect(1100, y, 452, 72, 14, x.selected ? withAlpha(t.accent, 0.3) : withAlpha('#ffffff', 0.05));
+                    if (x.selected) cv.strokeRoundRect(1100, y, 452, 72, 14, 2, t.accent);
+                    cv.text(x.title, 1124, y + 34, 26, t.text, { font: 'bold' });
+                    cv.text(x.sub, 1124, y + 58, 15, t.dim);
+                    cv.text(x.kind.toUpperCase(), 1532, y + 32, 14, x.selected ? t.text : t.dim, { align: 'right', font: 'bold', spacing: 1.5 });
+                    if (cv.own) cv.target(1100, y, 452, 72, () => { core.setSound(x.id); return redraw(); }, 'snd-' + x.id);
+                });
+                return;
+            }
             G.panel(cv, t, 1076, 44, 500, 468, 'Engine');
             ORDER.forEach((k, i) => {
                 const q = core.presetInfo(k), sel = k === core.preset(), y = 92 + i * 104;
@@ -317,12 +345,15 @@ mgu.run({
 
         async function render() {
             const t = ctx.theme(), cv = ctx.canvas(W, H).clear(t.bg);
+            // the Sound and Audio pages: only with Settings > Legacy
+            const tabs = core.legacy() ? TABS : TABS.slice(0, 1);
+            if (page >= tabs.length) page = 0;
             (page === 2 ? drawAudio : page === 1 ? drawSound : drawEngine)(cv, t);
-            G.frame(cv, t, TABS, page, [core.d.demo && { text: 'DEMO' }]);
+            G.frame(cv, t, tabs, page, [core.d.demo && { text: 'DEMO' }]);
             dirty = false;
             await ui.image('MAIN_GFX', cv);
         }
-        ctx.onTab((i) => { page = i; if (i === 2 && Date.now() - audio.at > 30000) audio.refresh(); return redraw(); });
+        ctx.onTab((i) => { page = core.legacy() ? i : 0; if (i === 2 && Date.now() - audio.at > 30000) audio.refresh(); return redraw(); });
         daemon.on('change', () => { dirty = true; });
         settings.onChange(() => { dirty = true; });
         let last = 0;

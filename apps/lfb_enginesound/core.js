@@ -18,7 +18,7 @@
  * ratio puts the preset's firing order on an even order of it: i6 3 x 4/3 = 4, V8 4 x 1.5 = 6, V10 5 x 1.6 = 8,
  * V12 6 x 4/3 = 8. The diesel's 4800 rpm becomes 6400 / 7200 / 7680 / 6400 rpm. */
 const PRESETS = {
-    i6: { title: 'Inline-6', sub: '3.0 turbo, B58 / S58 style', idle: 700, red: 7000, turbo: true, lock: 4 / 3 },
+    i6: { title: 'Inline 6', sub: '3.0 turbo, B58 / S58 style', idle: 700, red: 7000, turbo: true, lock: 4 / 3 },
     v8: { title: 'V8', sub: 'cross-plane, M5 style', idle: 650, red: 7200, turbo: true, lock: 1.5 },
     v10: { title: 'V10', sub: 'high-revving, naturally aspirated', idle: 900, red: 8250, turbo: false, lock: 1.6 },
     v12: { title: 'V12', sub: 'smooth, naturally aspirated', idle: 700, red: 7500, turbo: false, lock: 4 / 3 },
@@ -32,7 +32,7 @@ const SOUND_ENGINES = [
     // Active Sound Design emulation: it adds rpm-locked low engine orders under the car's own diesel, so it gets the
     // REAL rpm, and its four presets are diesel characters (shown with these names)
     { id: 'enhance', title: 'Enhance', short: 'bass for the diesel', sub: 'bass under the real diesel (Active Sound)', realRpm: true, presets: {
-        i6: { title: 'Straight-6 diesel', sub: 'BMW B57, X7 40d style' },
+        i6: { title: 'Inline 6 Diesel', sub: 'BMW B57, X7 40d style' },
         v8: { title: 'V8 TDI', sub: 'Audi SQ7 style' },
         v10: { title: 'V6 TDI', sub: 'Audi S6 / S7 style burble' },
         v12: { title: 'V6 TDI Sport', sub: 'stronger, dynamic calibration' } } },
@@ -40,6 +40,15 @@ const SOUND_ENGINES = [
     { id: 'replica', title: 'Replica', short: 'legacy', sub: 'legacy: the Engine_Sim website, ported 1:1', legacy: true },
 ];
 const DEFAULT_SOUND_ENGINE = SOUND_ENGINES[0].id;
+/* The sounds of the main page: a sound engine with one of its presets, in this order. Everything else (the other
+ * presets, the legacy sound engines, the Sound and Audio pages) shows only with the setting legacyEngines. */
+const SOUNDS = [
+    { id: 'i6', soundEngine: 'simulate', engine: 'i6' },
+    { id: 'v8', soundEngine: 'simulate', engine: 'v8' },
+    { id: 'v12', soundEngine: 'simulate', engine: 'v12' },
+    { id: 'i6d', soundEngine: 'enhance', engine: 'i6' },
+    { id: 'v8d', soundEngine: 'enhance', engine: 'v8' },
+];
 /* Sound engine ids saved by earlier versions (setting soundEngine). app.json's "aliases" maps them when the settings
  * load; soundEngineId() does it again. */
 const LEGACY_SOUND_ENGINES = { a: 'waveguide', b: 'replica', c: 'simulate', d: 'enhance', pulse: 'simulate', bass: 'enhance' };
@@ -49,6 +58,12 @@ function soundEngineId(v) {
     return SOUND_ENGINES.some((x) => x.id === id) ? id : DEFAULT_SOUND_ENGINE;
 }
 const soundEngineOf = (id) => SOUND_ENGINES.find((x) => x.id === soundEngineId(id));
+/** A preset's title / subtitle / redline as shown for a sound engine: the engine's own names where it has them
+ * (Enhance: diesel characters, no redline of their own). */
+function presetInfoOf(soundEngine, k) {
+    const p = PRESETS[k], own = soundEngineOf(soundEngine).presets;
+    return own && own[k] ? Object.assign({}, p, own[k], { red: null }) : p;
+}
 
 const { routeFor } = require('./route');
 
@@ -163,17 +178,34 @@ class Core {
         return v <= 50 ? v / 50 * 0.9 : 0.9 + (v - 50) / 50 * 0.5;
     }
 
-    /** The preset's title / subtitle / redline as shown: the sound engine's own names where it has them (Bass). */
-    presetInfo(k) {
-        const p = PRESETS[k], own = soundEngineOf(this.soundEngine()).presets;
-        return own && own[k] ? Object.assign({}, p, own[k], { red: null }) : p;
+    /** The preset's title / subtitle / redline as shown: the sound engine's own names where it has them (Enhance). */
+    presetInfo(k) { return presetInfoOf(this.soundEngine(), k); }
+
+    /** Setting legacyEngines: all presets, the legacy sound engines and the Sound and Audio pages show. */
+    legacy() { return this.settings.get('legacyEngines') === true; }
+
+    /** The main page's sounds: [{ id, title, sub, kind (the sound engine's title), selected }]. */
+    sounds() {
+        const se = this.soundEngine(), e = this.preset();
+        return SOUNDS.map((x) => {
+            const q = presetInfoOf(x.soundEngine, x.engine);
+            return { id: x.id, title: q.title, sub: q.sub, kind: soundEngineOf(x.soundEngine).title, selected: x.soundEngine === se && x.engine === e };
+        });
+    }
+
+    /** Choose one of the main page's sounds (the preset first: the new sound engine then starts with it). */
+    setSound(id) {
+        const x = SOUNDS.find((y) => y.id === id);
+        if (!x) return;
+        if (this.preset() !== x.engine) this.settings.set('engine', x.engine);
+        if (this.soundEngine() !== x.soundEngine) this.settings.set('soundEngine', x.soundEngine);
     }
 
     _applySettings() {
         const p = this.preset();
         this.daemon.send('ENGINE ' + this.soundEngine());
         this.daemon.send('E ' + p);
-        // (the Bass engine's presets are all turbo diesels)
+        // (Enhance's presets are all turbo diesels)
         const turbo = soundEngineOf(this.soundEngine()).realRpm || PRESETS[p].turbo;
         this.daemon.send('T ' + (turbo && this.settings.get('turbo') !== false ? 1 : 0));
         this.daemon.send('V ' + this.synthVolume().toFixed(2));
@@ -282,4 +314,4 @@ class Core {
     }
 }
 
-module.exports = { Core, PRESETS, ORDER, SOUND_ENGINES, SOUND_SETTINGS, DEFAULT_SOUND_ENGINE, LEGACY_SOUND_ENGINES, soundEngineId, soundEngineOf };
+module.exports = { Core, PRESETS, ORDER, SOUNDS, SOUND_ENGINES, SOUND_SETTINGS, DEFAULT_SOUND_ENGINE, LEGACY_SOUND_ENGINES, soundEngineId, soundEngineOf };
