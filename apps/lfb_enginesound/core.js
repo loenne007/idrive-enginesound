@@ -103,7 +103,7 @@ class Core {
         this.timer = setInterval(() => this.tick(), SEND_MS);
     }
 
-    soundEngine() { const e = this.settings.get('soundEngine'); return SOUND_ENGINES.some((x) => x.id === e) ? e : SOUND_ENGINES[0].id; }
+    soundEngine() { const e = this.settings.get('soundEngine'); return SOUND_ENGINES.some((x) => x.id === e) ? e : 'a'; }
 
     _applySettings() {
         const p = this.preset();
