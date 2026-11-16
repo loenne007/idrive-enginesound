@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+"""Engine C: objective regression checks (python3 stdlib only). Renders through build/es-synth-host --script.
+
+Levels are dB of RMS; envelopes are 10 ms RMS every 5 ms, energy-averaged. FFTs use Hann windows. These are
+objective regressions, not a substitute for listening."""
+import array, cmath, json, math, os, pathlib, subprocess, sys, wave
+ROOT = pathlib.Path(__file__).resolve().parent
+BIN = ROOT / 'build/es-synth-host'
+B = ROOT / 'build'
+SR = 48000
+fails = []
+
+
+def check(cond, msg):
+    if not cond:
+        fails.append(msg)
+        print('FAIL: ' + msg)
+
+
+def read(path):
+    with wave.open(str(path), 'rb') as w:
+        n = w.getnchannels(); a = array.array('h', w.readframes(w.getnframes()))
+    if sys.byteorder != 'little': a.byteswap()
+    return [v / 32768 for v in a[::n]]
+
+
+def render(p, name, lines, env=None):
+    script = B / f'{name}-{p}.txt'; script.write_text('\n'.join(lines) + '\n')
+    path = B / f'{name}-{p}.wav'
+    e = dict(os.environ); e.update(env or {})
+    subprocess.run([str(BIN), '--out', 'wav:' + str(path), '--preset', p, '--script', str(script)], check=True, env=e)
+    return read(path)
+
+
+def fft(x):
+    n = len(x); a = [complex(v) for v in x]; j = 0
+    for i in range(1, n):
+        bit = n >> 1
+        while j & bit: j ^= bit; bit >>= 1
+        j ^= bit
+        if i < j: a[i], a[j] = a[j], a[i]
+    m = 2
+    while m <= n:
+        root = cmath.exp(-2j * math.pi / m); h = m // 2
+        tw = [1]
+        for _ in range(h - 1): tw.append(tw[-1] * root)
+        for k in range(0, n, m):
+            for j in range(h):
+                u = a[k + j]; v = tw[j] * a[k + j + h]; a[k + j] = u + v; a[k + j + h] = u - v
+        m *= 2
+    return [abs(v) ** 2 for v in a[:n // 2]]
+
+
+N = 32768
+
+
+def spectrum(a, t):
+    x = a[int(t * SR):int(t * SR) + N]; assert len(x) == N
+    return fft([v * (.5 - .5 * math.cos(2 * math.pi * i / (N - 1))) for i, v in enumerate(x)])
+
+
+def energy(s, lo, hi): return sum(s[int(lo * N / SR):int(hi * N / SR)]) + 1e-30
+def rms(a): return math.sqrt(sum(x * x for x in a) / len(a)) + 1e-12
+def db(x): return 20 * math.log10(x)
+def lvl(a, t0, t1): return db(rms(a[int(t0 * SR):int(t1 * SR)]))
+
+
+def clicks(a):
+    """sample-slope outliers against the surrounding 10 ms slope RMS"""
+    bad = 0; worst = 0
+    for i in range(480, len(a) - 480, 240):
+        dif = [abs(a[k] - a[k - 1]) for k in range(i - 240, i + 240)]
+        r = math.sqrt(sum(x * x for x in dif) / len(dif)); mx = max(dif); ratio = mx / max(r, .0001)
+        worst = max(worst, ratio)
+        if mx > .035 and ratio > 14: bad += 1
+    return bad, worst
+
+
+def envelope(a, half):
+    hop = 240; e = [sum(x * x for x in a[i:i + 480]) / 480 for i in range(0, len(a) - 480, hop)]
+    return [10 * math.log10(sum(e[max(0, k - half):k + half + 1]) / len(e[max(0, k - half):k + half + 1]) + 1e-12)
+            for k in range(len(e))]
+
+
+def steady(rpm, load, thr, secs=2.0, gear=3):
+    return [f'{t / 50:.2f} P {rpm} {load} {thr} {gear} 60' for t in range(int(secs * 50) + 1)]
+
+
+def window_ok(e, ts, lim, pre=(-.35, -.05), post=(.6, .9), span=(-.05, .6)):
+    """envelope e sampled every 5 ms starting at ts-0.5 s: within lim dB of the settled levels around ts"""
+    k = lambda t: int((t + .5) * 200)
+    med = lambda v: sorted(v)[len(v) // 2]
+    a = med(e[k(pre[0]):k(pre[1])]); b = med(e[k(post[0]):k(post[1])]); w = e[k(span[0]):k(span[1])]
+    return min(w) - min(a, b), max(w) - max(a, b)
+
+
+info = json.loads(subprocess.check_output([str(BIN), '--info']))
+want = {'i6': (700, 7000), 'v8': (650, 7200), 'v10': (900, 8250), 'v12': (700, 7500)}
+check({p['id']: (p['idle'], p['redline']) for p in info['presets']} == want, '--info idle/redline numbers')
+
+# ---- demo renders: safety, clicks, shift continuity -------------------------------------------------------------
+for p in info['presets']:
+    name = p['id']; a = read(ROOT / 'samples' / f'{name}.wav')
+    check(all(math.isfinite(x) for x in a), f'{name}: non-finite samples')
+    # (the shared speaker protection, synth/common/protect.h, holds peaks under -1 dBFS; its 30 Hz high-pass can lift a peak a little)
+    peak = max(map(abs, a)); check(peak <= 10 ** (-1.5 / 20), f'{name}: peak {db(peak):.1f} dBFS > -1.5')
+    r = db(rms(a)); check(-24 < r < -16, f'{name}: demo RMS {r:.1f} dBFS')
+    bad, worst = clicks(a); check(bad == 0, f'{name}: {bad} clicks (worst slope ratio {worst:.1f})')
+    worst_shift = 0
+    for ts in (8.6, 10.8, 13.6, 17.0, 27.5, 29.5, 33.2):  # the demo's upshifts (full load, light load, after kickdown)
+        e = envelope(a[int((ts - .5) * SR):int((ts + 1) * SR)], 10)  # ~105 ms: the V8's own roughness is +-4 dB
+        lo, hi = window_ok(e, .5, 3)
+        worst_shift = max(worst_shift, -lo, hi)
+        check(lo >= -3 and hi <= 3, f'{name}: demo upshift at {ts}s gap/onset {lo:.1f}/{hi:.1f} dB')
+    print(f'{name}: demo RMS {r:.1f} dBFS, peak {db(peak):.1f} dBFS, slope ratio {worst:.1f}, '
+          f'upshift envelope within {worst_shift:.1f} dB of settled levels')
+
+# ---- steady states: firing pitch, half orders, brightness with load, off-gas level -------------------------------
+for p in info['presets']:
+    name = p['id']; n = p['cylinders']; pitches = []
+    for rpm in (1800, 3600):
+        a = render(name, f'steady{rpm}', steady(rpm, .7, .8)); s = spectrum(a, 1.2)
+        exp = rpm / 60 * n / 2; lo, hi = int(exp * .55 * N / SR), int(exp * 1.45 * N / SR)
+        k = max(range(lo, hi), key=s.__getitem__); got = k * SR / N
+        check(abs(got / exp - 1) < .05, f'{name}: firing peak {got:.1f} Hz at {rpm} rpm, expected {exp:.1f}')
+        pitches.append(round(got, 1))
+        if rpm == 3600:
+            cyc = [sum(s[round(rpm / 120 * h * N / SR) - 1:round(rpm / 120 * h * N / SR) + 2]) for h in range(1, 3 * n)]
+            nonfiring = sum(v for h, v in enumerate(cyc, 1) if h % n) / sum(cyc)
+            if name == 'v8': check(nonfiring > .01, 'v8: cross-plane bank character lost')
+            if name == 'v10': check(nonfiring > .01, 'v10: 90/54 degree character lost')
+            if name == 'i6': check(nonfiring < .03, 'i6: inline six lost its smoothness')
+    sh = []
+    for load in (.12, .95):
+        a = render(name, f'load{load}', steady(3000, load, load)); s = spectrum(a, 1.2)
+        sh.append(energy(s, 1000, 6000) / energy(s, 60, 6000))
+    check(sh[1] > sh[0] * 1.15, f'{name}: no brightening with load {sh}')
+    a = render(name, 'offgas', steady(3000, .95, 1, 2) +
+               [f'{2 + t / 50:.2f} P 3000 -0.6 0 3 60' for t in range(101)] +
+               [f'{4 + t / 50:.2f} P 3000 0.12 0.12 3 60' for t in range(101)] +
+               [f'{6 + t / 50:.2f} P {p["idle"]} 0.05 0 1 0' for t in range(101)] +
+               [f'{8 + t / 50:.2f} P 2500 0.95 1 3 50' for t in range(101)])
+    full, coast, light, idle, f25 = (lvl(a, 1, 2), lvl(a, 3, 4), lvl(a, 5, 6), lvl(a, 7, 8), lvl(a, 9, 10))
+    check(7 <= full - coast <= 10, f'{name}: coast {full - coast:.1f} dB under full load (want 7-10)')
+    check(7 <= full - light <= 10, f'{name}: light load {full - light:.1f} dB under full load (want 7-10)')
+    print(f'{name}: firing Hz {pitches}, 1-6 kHz share {sh[0]:.3f} -> {sh[1]:.3f} with load; at 3000 rpm coast '
+          f'{full - coast:.1f} dB and light load {full - light:.1f} dB under full load; idle {f25 - idle:.1f} dB under '
+          f'full load at 2500')
+
+# ---- response: an rpm step reaches 90 % of the firing-frequency change within ~30 ms -----------------------------
+# (zero crossings of the 0.5..1.5x firing band are too slow to resolve 30 ms; test_core checks the smoothed rpm
+# state directly. Here: the audio after a 2000 -> 5000 step has the new firing peak 60 ms later.)
+for name in ('i6', 'v8'):
+    n = 6 if name == 'i6' else 8
+    a = render(name, 'rpmstep', [f'{t / 50:.2f} P {2000 if t < 50 else 5000} .7 .8 3 60' for t in range(101)])
+    x = a[int(1.06 * SR):int(1.06 * SR) + 4096] + [0] * (N - 4096)
+    s = fft([v * (.5 - .5 * math.cos(2 * math.pi * i / 4095)) if i < 4096 else 0 for i, v in enumerate(x)])
+    exp = 5000 / 60 * n / 2; k = max(range(int(exp * .7 * N / SR), int(exp * 1.3 * N / SR)), key=s.__getitem__)
+    check(abs(k * SR / N / exp - 1) < .06, f'{name}: 60-145 ms after an rpm step the firing peak is {k * SR / N:.0f} Hz, want {exp:.0f}')
+
+# ---- shifts: S events cost no level (same drive with and without S), rpm steps neither ---------------------------
+def drive(kind, shift, step=False):
+    lines = []
+    for i in range(81):
+        t = i / 20
+        if kind == 'up':
+            k = min(1, max(0, (t - 2) / .3)); k = k * k * (3 - 2 * k); r = 6000 + (2800 - 6000) * k; l, th, g0, g1 = .9, .94, 3, 4
+            if step: r = 6000 if t < 2 else 2800
+        elif kind == 'light':
+            k = min(1, max(0, (t - 2) / .3)); k = k * k * (3 - 2 * k); r = 2200 + (1700 - 2200) * k; l, th, g0, g1 = .2, .2, 4, 5
+        else:
+            k = min(1, max(0, (t - 2) / .3)); k = k * k * (3 - 2 * k); r = 3000 + 1000 * k; l, th, g0, g1 = -.6, 0, 4, 3
+        lines.append(f'{t} P {r:.1f} {l} {th} {g1 if t >= 2 else g0} 60')
+        if shift and i == 40: lines.append(f'{t} S {g0} {g1}')
+    return lines
+
+
+worst = 0; worst_step = 0
+for p in ('i6', 'v8', 'v10', 'v12'):
+    for kind in ('up', 'light', 'down'):
+        a = envelope(render(p, f'shift-{kind}', drive(kind, True)), 5)
+        b = envelope(render(p, f'shift-{kind}-ref', drive(kind, False)), 5)
+        w = max(abs(a[k] - b[k]) for k in range(int(1.9 * 200), int(2.8 * 200)))
+        worst = max(worst, w)
+        check(w <= 3, f'{p}: {kind}shift changes the level by {w:.1f} dB')
+    a = render(p, 'shift-step', drive('up', True, True))
+    e = envelope(a[int(1.5 * SR):int(3 * SR)], 8)
+    lo, hi = window_ok(e, .5, 3)
+    worst_step = max(worst_step, -lo, hi)
+    check(lo >= -3 and hi <= 3, f'{p}: upshift as an rpm STEP: gap/onset {lo:.1f}/{hi:.1f} dB')
+print(f'shifts: S events move the envelope by at most {worst:.1f} dB (limit 3); an rpm-step upshift stays within '
+      f'{worst_step:.1f} dB of the settled levels')
+
+# ---- transitions: preset switches, S, mute, X changes, malformed input, watchdog, quit ---------------------------
+lines = []
+for i in range(160):
+    t = i / 20; lines.append(f'{t} P {1200 if t < 3 else 5500} .6 .7 3 60')
+    if i in (20, 21, 22, 23): lines.append(f'{t} E ' + ['v8', 'v10', 'v12', 'i6'][i - 20])
+    if i == 30: lines += [f'{t} X bass 2', f'{t} X offgas 0', f'{t} X pops 2', f'{t} X turbo 2']
+    if i == 34: lines += [f'{t} X bass 0', f'{t} X offgas 2']
+    if i == 38: lines += [f'{t} X bass 1', f'{t} X offgas 1', f'{t} X unknown 1', f'{t} X bass nan']
+    if i == 40: lines.append(f'{t} S 3 4')
+    if i == 70: lines.append(f'{t} S 4 3')
+    if i == 90: lines.append(f'{t} M 1')
+    if i == 110: lines.append(f'{t} M 0')
+lines += ['8 P nan inf nan 3 50', '8 E invalid', '8 V nan', '8 X', '11 V 0.8', '12 Q']
+a = render('v8', 'transitions', lines)
+bad, w = clicks(a); check(bad == 0, f'transitions: {bad} clicks (slope ratio {w:.1f})')
+check(lvl(a, 10.5, 11.5) < -80, 'stale-input watchdog did not fade out')
+check(lvl(a, 5.1, 5.4) < -50, 'mute failed')
+check(db(rms(a[-4800:])) < -80, 'quit fade failed')
+print(f'transitions: preset switches, X changes, S, mute, malformed lines: no clicks (slope ratio {w:.1f}); '
+      f'mute, watchdog and quit fade')
+
+# ---- X settings -------------------------------------------------------------------------------------------------
+def coast_level(x):
+    a = render('i6', f'offgas{x}', [f'0 X offgas {x}'] + steady(3000, -.6, 0, 2))
+    return lvl(a, 1, 2)
+
+
+o = [coast_level(x) for x in (0, 1, 2)]
+check(o[0] < o[1] - 10 and o[2] > o[1] + 4, f'X offgas: coast level {o}')
+bassl = []
+for x in (0, 1, 2):
+    a = render('v8', f'bass{x}', [f'0 X bass {x}'] + steady(2500, .6, .6))
+    s = spectrum(a, 1.2); bassl.append(10 * math.log10(energy(s, 30, 120) / energy(s, 400, 2000)))
+check(bassl[2] - bassl[0] > 12 and bassl[0] < bassl[1] < bassl[2], f'X bass: low/mid balance {bassl}')
+# turbo: solo renders (ES_SOLO=1 engine only, 2 turbo only) at full boost and at cruise
+boost = [f'{t / 50:.2f} P {1500 + 50 * t if t < 50 else 4000} .95 1 3 80' for t in range(301)]
+cruise = [f'{t / 50:.2f} P 2000 .2 .18 6 90' for t in range(301)]
+eng = render('i6', 'tb-eng', boost, {'ES_SOLO': '1'}); ec = render('i6', 'tb-engc', cruise, {'ES_SOLO': '1'})
+tl = []
+for x in (0, 1, 2):
+    t = render('i6', f'tb{x}', [f'0 X turbo {x}'] + boost, {'ES_SOLO': '2'})
+    tl.append(lvl(t, 4, 6) - lvl(eng, 4, 6))
+tc = render('i6', 'tbc', cruise, {'ES_SOLO': '2'})
+toff = render('i6', 'tboff', ['0 T 0'] + boost, {'ES_SOLO': '2'})
+check(-30 <= tl[1] <= -24, f'turbo at full boost {tl[1]:.1f} dB under the engine (want -30..-24)')
+check(tl[0] < -80 and 4 < tl[2] - tl[1] < 8, f'X turbo 0/1/2: {tl}')
+check(lvl(tc, 4, 6) - lvl(ec, 4, 6) < -40, f'turbo audible at cruise: {lvl(tc, 4, 6) - lvl(ec, 4, 6):.1f} dB')
+check(lvl(toff, 4, 6) < -80, 'T 0 does not silence the turbo')
+# blow-off (recirculation): a lift after boost; a full-load upshift (pedal stays down) must not trigger it
+lift = boost[:251] + [f'{5 + t / 50:.2f} P {4000 - 400 * t / 50} -.5 0 3 80' for t in range(101)]
+bl = []
+for x in (0, 1):
+    bv = render('i6', f'bov{x}', [f'0 X bov {x}'] + lift, {'ES_SOLO': '3'})
+    e = envelope(bv[int(4.9 * SR):int(5.8 * SR)], 1)
+    pk = max(e); bl.append(pk - lvl(eng, 4, 5))
+    dur = sum(1 for v in e if v > pk - 20) * .005
+check(bl[0] < -80, 'X bov 0 does not silence the blow-off')
+check(-20 <= bl[1] <= -8 and dur < .3, f'blow-off peak {bl[1]:.1f} dB re engine, {dur * 1000:.0f} ms (want -20..-8 dB, < 300 ms)')
+up = boost[:251] + ['5 S 3 4'] + [f'{5 + t / 50:.2f} P {4000 - 1300 * min(1, t / 15):.0f} .95 1 4 80' for t in range(101)]
+bvs = render('i6', 'bov-shift', up, {'ES_SOLO': '3'})
+check(lvl(bvs, 4.9, 7) < -80, 'a gear shift triggered the blow-off')
+# pops: V8 lift-off after a pull; transient count in the window after the lift
+def pops(x, shift=False):
+    """pops have their own random stream: the difference against the pops-0 render is exactly the pops"""
+    lines = [f'0 X pops {x}'] + [f'{t / 50:.2f} P {3000 + 30 * t:.0f} .95 1 3 80' for t in range(101)]
+    if shift: lines += ['2 S 3 4'] + [f'{2 + t / 50:.2f} P {6000 - 2000 * min(1, t / 15):.0f} .95 1 4 80' for t in range(101)]
+    else: lines += [f'{2 + t / 50:.2f} P {6000 - 1500 * t / 50:.0f} -.6 0 3 80' for t in range(101)]
+    return render('v8', f'pops{x}{int(shift)}', lines)
+
+
+def pop_events(a, b):
+    """events: rising edges of the 5 ms RMS of a - b above half the engine's own RMS after the lift"""
+    seg = slice(int(2.05 * SR), int(3.55 * SR)); d = [x - y for x, y in zip(a[seg], b[seg])]
+    ref = .5 * rms(b[seg]); e = [rms(d[i:i + 240]) for i in range(0, len(d) - 240, 240)]
+    ev = sum(1 for k, v in enumerate(e) if v > ref and (k == 0 or e[k - 1] <= ref))
+    return ev, db(max(e) / rms(b[seg]))
+
+
+p0 = pops(0); pc = [pop_events(pops(x), p0) for x in (0, 1, 2)]
+check(pc[0][0] == 0 and pc[1][0] >= 1 and pc[2][0] > pc[1][0] and pc[2][1] > pc[1][1] + 3, f'X pops 0/1/2 (events, peak dB) {pc}')
+ps = pop_events(pops(2, True), pops(0, True))
+check(ps[0] == 0, f'a gear shift triggered pops {ps}')
+print(f'X: offgas coast {o[0]:.1f}/{o[1]:.1f}/{o[2]:.1f} dBFS; bass low/mid {bassl[0]:.1f}/{bassl[1]:.1f}/'
+      f'{bassl[2]:.1f} dB; turbo {tl[1]:.1f} dB under the engine at full boost (x2: {tl[2]:.1f}), '
+      f'{lvl(tc, 4, 6) - lvl(ec, 4, 6):.1f} dB at cruise; blow-off peak {bl[1]:.1f} dB, {dur * 1000:.0f} ms; '
+      f'pops 0/1/2: {pc[0][0]}/{pc[1][0]}/{pc[2][0]} events in 1.5 s, loudest {pc[1][1]:.1f}/{pc[2][1]:.1f} dB re the engine')
+if fails:
+    print(f'{len(fails)} FAILED'); sys.exit(1)
+print('PASS: levels, pitch, brightness, off-gas level, response, shifts, transitions, X settings, watchdog, quit')

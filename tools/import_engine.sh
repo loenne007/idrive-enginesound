@@ -1,15 +1,15 @@
 #!/bin/sh
-# tools/import_engine.sh <id> <git ref>: copy synth/ of an agent's branch into synth/<id>/ and wire it into this
+# tools/import_engine.sh <id> <git ref> [<path>]: copy <path> (default synth) of an agent's branch into synth/<id>/ and wire it into this
 # layout: its car binary as tool/lfb-enginesound/es-synth-<id>, the shared loader / glibc check, the shared speaker
 # protection (tools/add_protect.py).
 set -eu
-id=$1; ref=$2
+id=$1; ref=$2; src=${3:-synth}
 root=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
-git -C "$root" archive "$ref" synth | tar -x -C "$tmp"
+git -C "$root" archive "$ref" "$src" | tar -x -C "$tmp"
 rm -rf "$root/synth/$id"
 mkdir -p "$root/synth/$id"
-cp -R "$tmp/synth/." "$root/synth/$id/"
+cp -R "$tmp/$src/." "$root/synth/$id/"
 rm -rf "$tmp" "$root/synth/$id/common" "$root/synth/$id/build"
 cd "$root/synth/$id"
 rm -f protect.h   # the shared one in synth/common is used
