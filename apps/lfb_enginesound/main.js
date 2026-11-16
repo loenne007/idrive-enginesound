@@ -149,7 +149,7 @@ mgu.run({
                     { primary: x.id === se, key: 'se-' + x.id, busy: !there });
             });
             const cur = SOUND_ENGINES.find((x) => x.id === se);
-            cv.text(cur.sub + (PRESETS[core.preset()].turbo ? ' - turbo ' + (settings.get('turbo') !== false ? 'on' : 'off') : ''), 1100, 502, 15, t.dim);
+            cv.text(cur.sub + (PRESETS[core.preset()].turbo || cur.realRpm ? ' - turbo ' + (settings.get('turbo') !== false ? 'on' : 'off') : ''), 1100, 502, 15, t.dim);
         }
 
         /* ---------- Sound page: sliders for the X settings ---------- */

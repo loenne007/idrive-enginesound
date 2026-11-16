@@ -137,7 +137,9 @@ class Core {
         const p = this.preset();
         this.daemon.send('ENGINE ' + this.soundEngine());
         this.daemon.send('E ' + p);
-        this.daemon.send('T ' + (PRESETS[p].turbo && this.settings.get('turbo') !== false ? 1 : 0));
+        // (D's presets are all turbo diesels)
+        const turbo = soundEngineOf(this.soundEngine()).realRpm || PRESETS[p].turbo;
+        this.daemon.send('T ' + (turbo && this.settings.get('turbo') !== false ? 1 : 0));
         this.daemon.send('V ' + (clamp(Number(this.settings.get('volume')) || 60, 0, 100) / 100).toFixed(2));
         SOUND_SETTINGS.forEach((x) => this.daemon.send('X ' + x.name + ' ' + this.soundSetting(x.key).toFixed(2)));
     }

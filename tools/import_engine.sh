@@ -26,6 +26,7 @@ car: build/es-synth
 ''', mk, count=1)
 open('Makefile', 'w').write(mk)
 PY
+sed -i.bak -e 's# protect\.h# ../common/protect.h#g' -e 's# -I\. -I\.\./common# -I../common#' Makefile && rm -f Makefile.bak
 cp ../../tools/check_glibc.py check_glibc.py
 python3 ../../tools/add_protect.py .
 make car

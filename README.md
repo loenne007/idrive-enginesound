@@ -54,6 +54,7 @@ own C source and tests, built into `tool/lfb-enginesound/es-synth-<id>`; the ser
 |---|---|
 | `a` | rewritten around Engine_Sim's sound path (agent A) |
 | `b` | Engine_Sim ported 1:1 (agent B) |
+| `d` | Active Sound Design emulation: enriches the car's own diesel with rpm-locked engine orders (BMW B57 / Audi V6, V8 TDI style); gets the real rpm |
 
 A new engine: a new `synth/<id>/` (same command line and control lines, see [synth/PROTOCOL.md](synth/PROTOCOL.md)), its binary in
 the tool's `component.json` `files`, its entry in `SOUND_ENGINES` (`apps/lfb_enginesound/core.js`) and in the
