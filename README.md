@@ -2,7 +2,7 @@
 
 A synthesized engine sound on your BMW's speakers, driven live by the car's **real rpm, gear and engine load**.
 Pick an **inline-6** (B58 / S58 style), a cross-plane **V8**, a high-revving **V10** or a **V12**, or let the
-**Bass** sound engine give the car's own diesel the depth of a big six or V8 TDI. The sound is generated in real time
+**Enhance** sound engine give the car's own diesel the depth of a big six or V8 TDI. The sound is generated in real time
 on the head unit, not played back from recordings.
 
 Made for the BMW iDrive 7 head unit (MGU), installed through the [MGU Store](https://github.com/robertnisipeanu/mgu-store).
@@ -20,8 +20,8 @@ Developed for a G20 320d (B47 diesel, ZF 8HP).
 4. Start the engine. The app starts with the head unit; open its tile to pick the engine, the sound engine and the
    audio route.
 
-Updating from a version before 1.0 keeps your settings: the old sound engine choice (`a` / `b` / `c` / `d`) becomes
-Waveguide / Pulse / Pulse / Bass.
+Updating keeps your settings: the sound engine chosen in an earlier version (`a` / `b` / `c` / `d`, `pulse` / `bass`)
+becomes Waveguide / Replica / Simulate / Enhance, Simulate / Enhance.
 
 ## How it works
 
@@ -44,14 +44,16 @@ Waveguide / Pulse / Pulse / Bass.
 
 ## Sound engines
 
-Three synthesizers ("sound engines") are installed side by side; each plays all four presets. Pick one on the
-Engine page or in *Settings → Sound engine*.
+Four synthesizers ("sound engines") are installed side by side; each plays all four presets. Pick one on the
+Engine page or in *Settings → Sound engine*. **Simulate** and **Enhance** are the two to use; the older **Waveguide**
+and **Replica** are offered only with *Settings → Legacy sound engines*.
 
 | Id | Title | |
 |---|---|---|
-| `pulse` | **Pulse** (default) | Light and quick. Per cylinder an exhaust and an intake pressure pulse at its crank angle, with the load's rasp riding on each pulse, through quarter-wave pipes, a collector and muffler chambers; an explicit level map (off the gas about 4 dB under full load). Follows a step in rpm within ~26 ms, runs at 300x+ realtime. [synth/pulse](synth/pulse/README.md) |
-| `waveguide` | **Waveguide** | Engine_Sim's sound path rewritten in C: combustion events into delay-line waveguide pipes, muffler, Helmholtz airbox, a sub layer, a turbo layer, cabin filter, small room and three-band dynamics. Fuller and darker. [synth/waveguide](synth/waveguide/README.md) |
-| `bass` | **Bass (Active Sound)** | An Active Sound Design emulation: it does not play a foreign engine but adds rpm-locked low engine orders (mostly 30–150 Hz) under the car's own diesel, from the **real** rpm. Its presets are diesel characters: **B57 straight-6** (i6), **V8 TDI** (v8), **V6 TDI** (v10), **V6 TDI Sport** (v12). [synth/bass](synth/bass/README.md) |
+| `simulate` | **Simulate** (default) | Light and quick. Per cylinder an exhaust and an intake pressure pulse at its crank angle, with the load's rasp riding on each pulse, through quarter-wave pipes, a collector and muffler chambers; an explicit level map (off the gas about 4 dB under full load). Follows a step in rpm within ~26 ms, runs at 300x+ realtime. [synth/simulate](synth/simulate/README.md) |
+| `waveguide` | **Waveguide** (legacy) | Engine_Sim's sound path rewritten in C: combustion events into delay-line waveguide pipes, muffler, Helmholtz airbox, a sub layer, a turbo layer, cabin filter, small room and three-band dynamics. Fuller and darker. [synth/waveguide](synth/waveguide/README.md) |
+| `replica` | **Replica** (legacy) | The Engine_Sim website's sound engine ported 1:1 to C (its Web Audio nodes rebuilt as Chrome runs them), driven by the car's data, with automatic-gearbox shifts and a quiet turbo. The heaviest on the CPU (~35x realtime on a Mac). [synth/replica](synth/replica/README.md) |
+| `enhance` | **Enhance** | An Active Sound Design emulation: it does not play a foreign engine but adds rpm-locked low engine orders (mostly 30–150 Hz) under the car's own diesel, from the **real** rpm. Its presets are diesel characters: **B57 straight-6** (i6), **V8 TDI** (v8), **V6 TDI** (v10), **V6 TDI Sport** (v12). [synth/enhance](synth/enhance/README.md) |
 
 Each is a folder `synth/<id>/` with its own C source, tests and sample renders (`samples/*.wav`, 40 s demo drives),
 built into `tool/lfb-enginesound/es-synth-<id>`. All share one command line and control protocol
@@ -59,9 +61,9 @@ built into `tool/lfb-enginesound/es-synth-<id>`. All share one command line and 
 
 ## Pages
 
-- **Engine**: playing / standby and why, the audio route's state, on / off, **Test sound** (10 s of beeps through the
-  route the engine plays on, also with the engine off), volume; live car rpm, the engine's rpm, load, gear and speed;
-  the preset and the sound engine.
+- **Engine**: playing / standby and why, the sound engine, the audio mode (tap: over the music / instead of it),
+  on / off and **Test sound** (10 s of beeps through the route the engine plays on, also with the engine off); live
+  car rpm, the engine's rpm, load, gear and speed; the preset.
 - **Sound**: sliders (0–200 %, 100 % = the sound engine's own default) for **Off the gas** (idle, coasting, light
   load), **Turbo**, **Blow-off**, **Pops & bangs** and **Bass**; **Reset all**. Also in Settings. Whatever they are
   set to, the speaker protection (below) keeps the output safe.
@@ -96,8 +98,10 @@ available, and only while it plays; leftovers of a crash or a power-off are remo
 
 ## Speaker protection
 
-The last stage of every sound engine (`synth/common/protect.h`): no DC or infrasound (30 Hz high-pass), nothing
-above 16 kHz, the bass below ~100 Hz held under -8 dBFS, the long-term power held under -14 dBFS RMS, peaks under
+The last stage of every sound engine (`synth/common/protect.h`). In the car it first raises the engine by 10 dB to
+the loudness of radio and music, so the volume knob can stay where the radio is comfortable (and the radio isn't
+deafening when the engine sound stops). Then: no DC or infrasound (30 Hz high-pass), nothing above 16 kHz, the bass
+below ~150 Hz held under -3 dBFS, the long-term power held under -9 dBFS RMS (about mastered music), peaks under
 -1 dBFS, and a fade-in at start. `tools/add_protect.py` puts it into a new engine; `make -C synth test` tests it.
 
 ## Settings
@@ -105,9 +109,10 @@ above 16 kHz, the bass below ~100 Hz held under -8 dBFS, the long-term power hel
 | Setting | |
 |---|---|
 | Engine sound | on / off (also the **On / Off** button) |
-| Engine | inline-6, V8, V10, V12 (with Bass: B57 straight-6, V8 TDI, V6 TDI, V6 TDI Sport) |
-| Sound engine | Pulse, Waveguide, Bass (Active Sound) |
-| Volume | 10–100 % of the synth's level (the car's own volume knob applies on top) |
+| Engine | inline-6, V8, V10, V12 (with Enhance: B57 straight-6, V8 TDI, V6 TDI, V6 TDI Sport) |
+| Sound engine | Simulate, Enhance (the legacy Waveguide, Replica with *Legacy sound engines*) |
+| Legacy sound engines | offers Waveguide and Replica too |
+| Volume | 10–100 %, default 50 %; the car's own volume knob applies on top. 50 % is about 90 % of versions before 1.1, 100 % about 6 dB more |
 | Only in Sport mode | plays only while the driving mode is Sport |
 | Play over music (mix) | the mix route instead of the exclusive one (above) |
 | Turbo sound | the turbo whistle and blow-off of the turbo presets |
@@ -135,7 +140,7 @@ above 16 kHz, the bass below ~100 Hz held under -8 dBFS, the long-term power hel
 node test/core.test.js                       # the app's logic and audio routes
 make -C synth test                           # every sound engine (renders, checks, bench) and the protection
 make -C synth car                            # the head unit's binaries (zig 0.17), checked by tools/check_glibc.py
-synth/pulse/build/es-synth-host --out wav:v8.wav --demo 40 --preset v8   # listen to a demo drive
+synth/simulate/build/es-synth-host --out wav:v8.wav --demo 40 --preset v8   # listen to a demo drive
 
 python3 kit/tools/build.py --preview-only lfb_enginesound        # stage the app without BMW's SDK
 node kit/tools/preview.js dist/lfb_enginesound preview wait=8 render --set demo=on   # its page as PNGs
@@ -151,7 +156,7 @@ in `component.json` `files`, its entry in `SOUND_ENGINES` (`core.js`) and in the
 ## Credits
 
 - [Engine_Sim](https://github.com/YigitSalihEmecen/Engine_Sim) by Yigit Salih Emecen (MIT): the Waveguide engine
-  re-implements its sound path; Pulse uses its pipe, muffler and airbox values; firing orders and crank angles.
+  re-implements its sound path; Simulate uses its pipe, muffler and airbox values; Replica ports it 1:1; firing orders and crank angles.
 - [DasEtwas/enginesound](https://github.com/DasEtwas/enginesound) (MIT) and
   [Antonio-R1/engine-sound-generator](https://github.com/Antonio-R1/engine-sound-generator) (MIT): ideas (valve and
   waveguide engine model after Baldan et al. 2015).

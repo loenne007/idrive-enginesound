@@ -76,7 +76,7 @@ int synth_control(Synth *s, const char *line) {
         s->mute = k;
         return 1;
     }
-    if (sscanf(line, "V %f %c", &v, &extra) == 1 && isfinite(v) && v >= 0 && v <= 1) {
+    if (sscanf(line, "V %f %c", &v, &extra) == 1 && isfinite(v) && v >= 0 && v <= 2) {
         s->tvolume = v;
         return 1;
     }

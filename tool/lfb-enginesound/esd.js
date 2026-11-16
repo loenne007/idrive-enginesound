@@ -3,7 +3,7 @@
  * esd.js - the Engine Sound service (runs on the head unit's own Node 8, /usr/bin/node).
  *
  * It owns the synthesizer process and a control socket for the app. Each sound engine is its own synthesizer binary
- * beside this file, es-synth-<engine> (synth/<engine>/ in the repository: pulse, waveguide, bass), all with the same
+ * beside this file, es-synth-<engine> (synth/<engine>/ in the repository: simulate, enhance, and the legacy waveguide, replica), all with the same
  * command line and control lines (synth/PROTOCOL.md); the app picks one with ENGINE <engine>.
  *
  *   /run/lfb-enginesound/ctl.sock   (0660, group tm_oap_app: the OAP apps' group)
@@ -26,7 +26,7 @@ const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const RUN_DIR = process.env.ES_RUN_DIR || '/run/lfb-enginesound';
 const SOCK = path.join(RUN_DIR, 'ctl.sock');
 const SYNTH_DIR = process.env.ES_SYNTH_DIR || __dirname;
@@ -34,9 +34,9 @@ const SYNTH_DIR = process.env.ES_SYNTH_DIR || __dirname;
 function engines() {
     try { return fs.readdirSync(SYNTH_DIR).map((f) => /^es-synth-([a-z0-9_]+)$/.exec(f)).filter(Boolean).map((m) => m[1]).sort(); } catch (e) { return []; }
 }
-const DEFAULT_ENGINE = 'pulse';
-// the sound engine ids before 1.0 (an app not yet updated may still send them)
-const LEGACY = { a: 'waveguide', b: 'pulse', c: 'pulse', d: 'bass' };
+const DEFAULT_ENGINE = 'simulate';
+// sound engine ids of earlier versions (an app not yet updated may still send them)
+const LEGACY = { a: 'waveguide', b: 'replica', c: 'simulate', d: 'enhance', pulse: 'simulate', bass: 'enhance' };
 /** The chosen engine's binary, else the default, else the first one there. */
 function synthPath() {
     if (process.env.ES_SYNTH) return process.env.ES_SYNTH;
@@ -109,10 +109,17 @@ function toSynth(line) {
     try { state.child.stdin.write(line + '\n'); } catch (e) { /* restarts on exit */ }
 }
 
+/** A restart we asked for is no crash: it starts at once (no back-off). */
+function restartNow() {
+    state.lastStart = 0; state.starts = 0;
+    if (state.retryT) { clearTimeout(state.retryT); state.retryT = null; }
+}
+
 function setDevice(dev) {
     const d = dev && dev !== 'none' ? dev : null;
     if (d === state.device) return;
     state.device = d;
+    restartNow();
     stopSynth(() => startSynth());
 }
 
@@ -121,7 +128,9 @@ function setEngine(e) {
     if (!/^[a-z0-9_]+$/.test(e) || e === state.engine) return;
     state.engine = e;
     log('engine ' + e + (engines().indexOf(e) < 0 ? ' (not installed: ' + path.basename(synthPath()) + ')' : ''));
+    restartNow();
     if (state.child) stopSynth(() => startSynth());
+    else startSynth();
 }
 
 function tone(dev) {

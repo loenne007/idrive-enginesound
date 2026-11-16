@@ -20,22 +20,24 @@ const PRESETS = {
 };
 const ORDER = ['i6', 'v8', 'v10', 'v12'];
 /* The sound engines (synth/<id>/ in the repository, es-synth-<id> in the service): each one plays all four presets;
- * the service runs the chosen one (ENGINE <id>). The first one is the default. */
+ * the service runs the chosen one (ENGINE <id>). The first one is the default. "legacy" ones are offered only with the
+ * setting legacyEngines on. */
 const SOUND_ENGINES = [
-    { id: 'pulse', title: 'Pulse', sub: 'light: pulses per cylinder, pipes, muffler' },
-    { id: 'waveguide', title: 'Waveguide', sub: "Engine_Sim's pipes and resonators" },
+    { id: 'simulate', title: 'Simulate', short: 'a whole engine', sub: 'a whole engine: pulses per cylinder, pipes, muffler' },
     // Active Sound Design emulation: it adds rpm-locked low engine orders under the car's own diesel, so it gets the
     // REAL rpm, and its four presets are diesel characters (shown with these names)
-    { id: 'bass', title: 'Bass', sub: 'Active Sound: bass under the real diesel', realRpm: true, presets: {
+    { id: 'enhance', title: 'Enhance', short: 'bass for the diesel', sub: 'bass under the real diesel (Active Sound)', realRpm: true, presets: {
         i6: { title: 'Straight-6 diesel', sub: 'BMW B57, X7 40d style' },
         v8: { title: 'V8 TDI', sub: 'Audi SQ7 style' },
         v10: { title: 'V6 TDI', sub: 'Audi S6 / S7 style burble' },
         v12: { title: 'V6 TDI Sport', sub: 'stronger, dynamic calibration' } } },
+    { id: 'waveguide', title: 'Waveguide', short: 'legacy', sub: "legacy: Engine_Sim's pipes and resonators", legacy: true },
+    { id: 'replica', title: 'Replica', short: 'legacy', sub: 'legacy: the Engine_Sim website, ported 1:1', legacy: true },
 ];
 const DEFAULT_SOUND_ENGINE = SOUND_ENGINES[0].id;
-/* Sound engine ids saved by versions before 1.0 (setting soundEngine): a -> waveguide, b (removed) -> pulse,
- * c -> pulse, d -> bass. app.json's "aliases" maps them when the settings load; soundEngineId() does it again. */
-const LEGACY_SOUND_ENGINES = { a: 'waveguide', b: 'pulse', c: 'pulse', d: 'bass' };
+/* Sound engine ids saved by earlier versions (setting soundEngine). app.json's "aliases" maps them when the settings
+ * load; soundEngineId() does it again. */
+const LEGACY_SOUND_ENGINES = { a: 'waveguide', b: 'replica', c: 'simulate', d: 'enhance', pulse: 'simulate', bass: 'enhance' };
 /** A stored soundEngine value as a current id (old ids mapped, unknown -> the default). */
 function soundEngineId(v) {
     const id = Object.prototype.hasOwnProperty.call(LEGACY_SOUND_ENGINES, v) ? LEGACY_SOUND_ENGINES[v] : v;
@@ -137,6 +139,19 @@ class Core {
 
     soundEngine() { return soundEngineId(this.settings.get('soundEngine')); }
 
+    /** The engines offered: the main ones, and the legacy ones with the setting legacyEngines on (or chosen). */
+    soundEngines() {
+        const all = this.settings.get('legacyEngines') === true, cur = this.soundEngine();
+        return SOUND_ENGINES.filter((x) => !x.legacy || all || x.id === cur);
+    }
+
+    /** The volume setting (10-100 %) as the synth's gain (V 0..2): 50 % = 0.9, 100 % = 1.8 (about +6 dB over the
+     * loudest of earlier versions; the speaker protection keeps the output safe). */
+    synthVolume() {
+        const v = Number(this.settings.get('volume'));
+        return clamp((isFinite(v) && v > 0 ? v : 50) / 100 * 1.8, 0, 2);
+    }
+
     /** The preset's title / subtitle / redline as shown: the sound engine's own names where it has them (Bass). */
     presetInfo(k) {
         const p = PRESETS[k], own = soundEngineOf(this.soundEngine()).presets;
@@ -150,7 +165,7 @@ class Core {
         // (the Bass engine's presets are all turbo diesels)
         const turbo = soundEngineOf(this.soundEngine()).realRpm || PRESETS[p].turbo;
         this.daemon.send('T ' + (turbo && this.settings.get('turbo') !== false ? 1 : 0));
-        this.daemon.send('V ' + (clamp(Number(this.settings.get('volume')) || 60, 0, 100) / 100).toFixed(2));
+        this.daemon.send('V ' + this.synthVolume().toFixed(2));
         SOUND_SETTINGS.forEach((x) => this.daemon.send('X ' + x.name + ' ' + this.soundSetting(x.key).toFixed(2)));
     }
 

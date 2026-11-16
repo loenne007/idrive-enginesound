@@ -133,7 +133,7 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    if (!isfinite(volume) || volume < 0 || volume > 1 || !isfinite(demo) || demo < 0 || !isfinite(bench) ||
+    if (!isfinite(volume) || volume < 0 || volume > 2 || !isfinite(demo) || demo < 0 || !isfinite(bench) ||
         bench < 0)
         return 2;
     if (bench > 0) {
@@ -192,6 +192,8 @@ int main(int argc, char **argv) {
     }
     alsa_out = !strncmp(out, "alsa:", 5);
     protect_init(&prot);
+    /* the car (ALSA, raw) gets the live gain: radio loudness; WAV renders keep the engine's level unless ES_LIVE_GAIN */
+    if (strncmp(out, "wav:", 4) || getenv("ES_LIVE_GAIN")) protect_live(&prot);
     synth_init(&s, p, volume);
     signal(SIGINT, handler);
     signal(SIGTERM, handler);

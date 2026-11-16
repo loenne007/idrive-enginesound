@@ -1,4 +1,4 @@
-# Bass sound engine (`es-synth-bass`): active sound design for the car's own diesel
+# Enhance sound engine (`es-synth-enhance`): active sound design for the car's own diesel
 
 This engine does what the factory systems do (BMW Active Sound Design in the X7 / X5 xDrive40d with the B57
 straight-six diesel, the Audi S6 / S7 TDI and SQ7 TDI sound actuator / active exhaust). It does **not** simulate a
@@ -20,7 +20,7 @@ more "tonal" than the result in the cabin.
 ```
 make host            # build/es-synth-host
 ./test.sh            # internal checks, renders samples/, spectral checks, benchmark
-make car             # zig cc -target x86_64-linux-gnu.2.27, loader /lib/ld-linux-x86-64.so.2 -> ../../tool/lfb-enginesound/es-synth-bass
+make car             # zig cc -target x86_64-linux-gnu.2.27, loader /lib/ld-linux-x86-64.so.2 -> ../../tool/lfb-enginesound/es-synth-enhance
 ./render_all.sh      # samples/{i6,v8,v10,v12}.wav: 40 s mono demo drives
 ```
 
@@ -112,7 +112,7 @@ gain tables (rpm x load, dB) -> 12 ms up / 50 ms down -> order bank  sum_k g_k s
   needs load > 0.25 again).
 * **Output.** Volume (50 ms), gate (mute, Q, no `P` for 1.5 s; 40 ms fade), preset crossfade (80 ms; the order bank
   is shared, so only the gains move) and a soft ceiling at -3 dBFS. Then comes `protect.h` (30 Hz HP, bass
-  limiter -8 dBFS, power limiter, peak limiter).
+  limiter, power limiter, peak limiter).
 
 `X` settings (0..2, 1 = default, smoothed 50 ms, landing exactly on 0):
 
@@ -122,7 +122,7 @@ gain tables (rpm x load, dB) -> 12 ms up / 50 ms down -> order bank  sum_k g_k s
 | `turbo` | the tonal whistle's level when `T 1` (0 = none; this engine's default is `T 0`) |
 | `bov` | recirculation sigh level (0 = none; only after real boost, see above) |
 | `pops` | overrun burble rate, window length and level (0 = none, 2 = more often and louder) |
-| `bass` | 120 Hz shelf, `9 (bass - 1)` dB on top of the preset's own. `X bass 2` drives the band under 100 Hz into the protection's -8 dBFS bass limiter (i6 / v10 / v12; v8 stays at about -10 dBFS) |
+| `bass` | 120 Hz shelf, `9 (bass - 1)` dB on top of the preset's own. `X bass 2` drives the band under 100 Hz into the protection's bass limiter (i6 / v10 / v12; v8 stays at about -10 dBFS) |
 
 ## Presets
 

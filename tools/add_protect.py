@@ -8,7 +8,7 @@ for d in map(pathlib.Path, sys.argv[1:]):
     if 'protect.h' not in m:
         m = m.replace('#include "synth.h"\n', '#include "synth.h"\n#include "protect.h" /* synth/common: speaker protection */\n', 1)
         m, n1 = re.subn(r'(\n(\s*)Alsa alsa = \{0\};\n)', r'\1\2Protect prot;\n', m, count=1)
-        m, n2 = re.subn(r'(\n(\s*)synth_init\(&s, p, volume\);\n(\s*)signal\(SIGINT)', r'\n\2protect_init(&prot);\n\2synth_init(&s, p, volume);\n\3signal(SIGINT', m, count=1)
+        m, n2 = re.subn(r'(\n(\s*)synth_init\(&s, p, volume\);\n(\s*)signal\(SIGINT)', r'\n\2protect_init(&prot);\n\2if (strncmp(out, \"wav:\", 4) || getenv(\"ES_LIVE_GAIN\")) protect_live(&prot); /* car: radio loudness */\n\2synth_init(&s, p, volume);\n\3signal(SIGINT', m, count=1)
         m, n3 = re.subn(r'(\n(\s*)synth_render\(&s, buf, n\);\n)', r'\1\2/* (the tone too) */\n', m, count=1)
         # after the render / tone branch, before the output: one protect_run for every output
         m, n4 = re.subn(r'(\n(\s*)if \(fp\) \{\n(\s*)if \(fwrite\(buf)', r'\n\2protect_run(&prot, buf, n); /* speaker protection, last stage */\1', m, count=1)

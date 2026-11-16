@@ -1,19 +1,19 @@
 # Sound engine protocol
 
-Every sound engine (`synth/<id>/`, binary `es-synth-<id>`: `pulse`, `waveguide`, `bass`) has the same command line
+Every sound engine (`synth/<id>/`, binary `es-synth-<id>`: `simulate`, `enhance`, `waveguide`, `replica`) has the same command line
 and reads the same control lines; the service (`tool/lfb-enginesound/esd.js`) runs the chosen one.
 
 ## Command line
 
 ```
-es-synth-<id> --out alsa:<PCM>|wav:<file>|raw [--preset i6|v8|v10|v12] [--volume 0..1] [--demo <seconds>|--script <file>]
+es-synth-<id> --out alsa:<PCM>|wav:<file>|raw [--preset i6|v8|v10|v12] [--volume 0..2] [--demo <seconds>|--script <file>]
 es-synth-<id> --tone alsa:<PCM>      # routing test: 10 s of soft 880 Hz beeps
 es-synth-<id> --info                 # JSON: sample_rate, presets (id, idle, redline, cylinders, turbo_default)
 es-synth-<id> --bench <seconds>      # render speed per preset
 ```
 
-e.g. `es-synth-pulse --out alsa:plug:smartx:CarLifeMedia_CF_48_STEREO --preset v8` in the car, or
-`synth/pulse/build/es-synth-host --out wav:v8.wav --demo 40 --preset v8` on a computer. Output: 48 kHz S16LE stereo
+e.g. `es-synth-simulate --out alsa:plug:smartx:CarLifeMedia_CF_48_STEREO --preset v8` in the car, or
+`synth/simulate/build/es-synth-host --out wav:v8.wav --demo 40 --preset v8` on a computer. Output: 48 kHz S16LE stereo
 (identical channels). Logs go to stderr. A script has one `<seconds> <control line>` per line, in order (see
 `synth/waveguide/README.md`). `ES_ALSA_US` sets the ALSA buffer (default 64000 us).
 
@@ -26,7 +26,7 @@ On stdin, one per line, typically 20-100 a second. Malformed lines are ignored; 
 | `P <rpm> <load> <throttle> <gear> <speed>` | the engine's rpm (mapped to the preset's range by the app; `bass` gets the car's real rpm), load -1..1 (negative = overrun), throttle 0..1, gear (-1 R, 0 N/P, 1..10), km/h |
 | `E <preset>` | `i6`, `v8`, `v10`, `v12`; crossfade, no clicks |
 | `T 0\|1` | the turbo layer off / on |
-| `V <0..1>` | master volume |
+| `V <0..2>` | master volume (the app sends 0.18-1.8: its 10-100 %) |
 | `M 0\|1` | mute (fade) |
 | `S <from> <to>` | a gear change of the car's automatic (ZF 8HP): smooth, no ignition cut |
 | `X <name> <value>` | a sound setting (below) |
@@ -54,8 +54,9 @@ sound as quick as it is in the car. The output buffer adds the device's own late
 
 ## Speaker protection
 
-Every engine's `main.c` runs `synth/common/protect.h` as its last stage, before every output (ALSA, WAV, raw):
-a 4th-order 30 Hz high-pass (no DC / infrasound), a 16 kHz low-pass, a bass limiter (below ~100 Hz held under
--8 dBFS), a power limiter (3 s RMS under -14 dBFS), a 1 ms look-ahead peak limiter and a soft clip under -1 dBFS,
-and a fade-in at start. `tools/add_protect.py synth/<id>` puts it into a new engine; `make -C synth test` tests it
-(`common/test_protect.c`).
+Every engine's `main.c` runs `synth/common/protect.h` as its last stage, before every output: on the car (ALSA, raw)
+first a +10 dB live gain (radio loudness; `ES_LIVE_GAIN_DB` 0..20 overrides; WAV renders keep the engine's own level
+unless `ES_LIVE_GAIN` is set), then a 4th-order 30 Hz high-pass (no DC / infrasound), a 16 kHz low-pass, a bass
+limiter (below ~150 Hz held under -3 dBFS), a power limiter (3 s RMS under -9 dBFS), a 1 ms look-ahead peak limiter
+and a soft clip under -1 dBFS, and a fade-in at start. `tools/add_protect.py synth/<id>` puts it into a new engine;
+`make -C synth test` tests it (`common/test_protect.c`, with and without the live gain).

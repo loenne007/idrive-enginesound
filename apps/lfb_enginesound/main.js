@@ -16,7 +16,7 @@ const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
 const { withAlpha } = require('./kit/canvas');
 const Car = require('./kit/car');
-const { Core, PRESETS, ORDER, SOUND_ENGINES, SOUND_SETTINGS } = require('./core');
+const { Core, ORDER, SOUND_SETTINGS } = require('./core');
 const { Daemon } = require('./daemon');
 const { Route, MIX_DEFAULT, mixCandidates, mixRoute, sameRoute } = require('./route');
 
@@ -25,7 +25,6 @@ const TABS = ['Engine', 'Sound', 'Audio'];
 const MIX_ROWS = 5;           // mix route candidates shown on the Audio page
 // the Sound page's sliders: track from SX0 to SX1, one row per setting
 const SX0 = 520, SX1 = 1290, ROW0 = 112, ROWH = 76;
-const VOLS = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
 const FES = 'de.bmw.infotainment.drivingexcitement.FES';
 // FES torque: 12 bit, 0.5 Nm per bit, 0 Nm at raw 2047, 4095 = no value (kit/runtime/car.js)
 const torqueOf = (raw) => (typeof raw === 'number' && raw < 4095 ? raw * 0.5 - 1023.5 : null);
@@ -108,11 +107,6 @@ mgu.run({
         let dirty = true, page = 0;
         const redraw = () => { dirty = true; return render(); };
 
-        const step = (key, list, d) => {
-            const v = settings.get(key), i = Math.max(0, list.indexOf(v));
-            settings.set(key, list[Math.max(0, Math.min(list.length - 1, i + d))]);
-            return redraw();
-        };
         ui.onClick('BTN_TOGGLE', () => { settings.set('enabled', settings.get('enabled') === false); return redraw(); });
         ui.onClick('BTN_TEST', () => { core.test(); return redraw(); });
         ui.onClick('BTN_ENGINE', () => { const i = ORDER.indexOf(core.preset()); settings.set('engine', ORDER[(i + 1) % ORDER.length]); return redraw(); });
@@ -120,25 +114,42 @@ mgu.run({
         /* ---------- Engine page ---------- */
         function drawEngine(cv, t) {
             const p = core.presetInfo(core.preset()), on = settings.get('enabled') !== false;
-            const red = p.red || Number(settings.get('realRedline')) || 4800;   // (D: the car's own range)
+            const red = p.red || Number(settings.get('realRedline')) || 4800;   // (Enhance: the car's own range)
             const why = core.reason, d = core.d, o = core.out;
-            // status
+
+            /* ---------- left: status, sound engine, audio mode, on / off and test ---------- */
             G.panel(cv, t, 24, 44, 520, 468, 'Engine Sound');
-            const col = !on ? t.dim : why ? t.warn : '#2fd27a';
-            cv.roundRect(48, 104, 472, 64, 14, withAlpha(col, 0.18));
-            cv.text(!on ? 'OFF' : why ? 'STANDBY' : 'PLAYING', 284, 148, 34, col, { align: 'center', font: 'bold', spacing: 2 });
-            cv.text(on && why ? why : core.mixOn() ? 'Over the music (mix)' : 'On the speakers (the music pauses)', 284, 196, 20, t.dim, { align: 'center' });
-            cv.text(routeText().slice(0, 52), 284, 226, 18, route.state === 'failed' ? t.warn : t.dim, { align: 'center' });
-            const st = daemon.status, last = st && st.log && st.log.length ? st.log[st.log.length - 1] : '';
-            if (!daemon.connected) cv.text('Engine Sound service not running (restart the head unit once)', 284, 252, 17, t.warn, { align: 'center' });
-            else cv.text(String(last).slice(0, 52), 284, 252, 15, t.dim, { align: 'center' });
-            G.button(cv, t, 48, 284, 472, 56, on ? 'Switch off' : 'Switch on', () => { settings.set('enabled', !on); return redraw(); }, { primary: !on, key: 'onoff' });
+            const down = !daemon.connected, failed = route.state === 'failed';
+            const col = !on ? t.dim : down || failed ? t.crit : why ? t.warn : '#2fd27a';
+            cv.roundRect(48, 102, 472, 84, 16, withAlpha(col, 0.14));
+            cv.circle(84, 144, 12, col);
+            cv.text(!on ? 'OFF' : down ? 'NO SERVICE' : failed ? 'NO SOUND' : why ? 'STANDBY' : 'PLAYING', 112, 138, 30, t.text, { font: 'bold', spacing: 2 });
+            const line = down ? 'Restart the head unit once'
+                : failed ? 'Audio route failed (see Audio)'
+                    : !on ? 'Switched off' : why ? why.charAt(0).toUpperCase() + why.slice(1) : 'Following the engine';
+            cv.text(line.slice(0, 40), 112, 168, 18, down || failed ? t.crit : t.dim);
+
+            // the sound engine: big tiles (the legacy ones only with Settings > Legacy sound engines)
+            const list = core.soundEngines(), se = core.soundEngine(), have = daemon.status && daemon.status.engines;
+            cv.text('SOUND ENGINE', 48, 222, 15, t.dim, { font: 'bold', spacing: 1.5 });
+            const tw = (472 - 10 * (list.length - 1)) / list.length;
+            list.forEach((x, i) => {
+                const tx = 48 + i * (tw + 10), sel = x.id === se, there = !have || have.indexOf(x.id) >= 0;
+                cv.roundRect(tx, 232, tw, 92, 14, sel ? withAlpha(t.accent, 0.3) : withAlpha('#ffffff', 0.05));
+                if (sel) cv.strokeRoundRect(tx, 232, tw, 92, 14, 2, t.accent);
+                cv.text(x.title, tx + tw / 2, 274, list.length > 2 ? 22 : 28, there ? t.text : t.dim, { align: 'center', font: 'bold' });
+                cv.text(x.short, tx + tw / 2, 304, 15, t.dim, { align: 'center' });
+                if (cv.own && there) cv.target(tx, 232, tw, 92, () => { settings.set('soundEngine', x.id); return redraw(); }, 'se-' + x.id);
+            });
+
+            // the audio mode: tap to switch between mix and exclusive
+            const mix = core.mixOn();
+            G.button(cv, t, 48, 346, 472, 52, mix ? 'Audio: over the music' : 'Audio: instead of the music', () => { settings.set('mix', !mix); return redraw(); },
+                { key: 'mix' });
+
             const testing = Date.now() < core.testUntil;
-            G.button(cv, t, 48, 354, 472, 52, testing ? 'Test sound: listen...' : 'Test sound (10 s beeps)', () => { core.test(); return redraw(); }, { key: 'test', busy: testing });
-            const vol = Number(settings.get('volume')) || 60;
-            G.button(cv, t, 48, 424, 80, 52, '-', () => step('volume', VOLS, -1), { key: 'vol-' });
-            cv.text('VOLUME ' + vol + '%', 284, 458, 22, t.text, { align: 'center', font: 'bold', spacing: 1.5 });
-            G.button(cv, t, 440, 424, 80, 52, '+', () => step('volume', VOLS, 1), { key: 'vol+' });
+            G.button(cv, t, 48, 420, 230, 60, on ? 'Switch off' : 'Switch on', () => { settings.set('enabled', !on); return redraw(); }, { primary: !on, key: 'onoff' });
+            G.button(cv, t, 290, 420, 230, 60, testing ? 'Listen...' : 'Test sound', () => { core.test(); return redraw(); }, { key: 'test', busy: testing });
 
             // live
             G.panel(cv, t, 560, 44, 500, 468, 'Live');
@@ -165,27 +176,16 @@ mgu.run({
             cv.text('KM/H', 920, 480, 14, t.dim, { align: 'center', font: 'bold', spacing: 1.5 });
             if (d.demo) cv.text('DEMO DATA', 1030, 494, 16, t.warn, { align: 'right', font: 'bold' });
 
-            // engines
+            /* ---------- right: the engine preset ---------- */
             G.panel(cv, t, 1076, 44, 500, 468, 'Engine');
             ORDER.forEach((k, i) => {
-                const q = core.presetInfo(k), sel = k === core.preset(), y = 96 + i * 76;
-                cv.roundRect(1100, y, 452, 68, 14, sel ? withAlpha(t.accent, 0.3) : withAlpha('#ffffff', 0.05));
-                if (sel) cv.strokeRoundRect(1100, y, 452, 68, 14, 2, t.accent);
-                cv.text(q.title, 1124, y + 32, 26, t.text, { font: 'bold' });
-                cv.text(q.red ? q.sub + ' - ' + q.red + ' rpm' : q.sub, 1124, y + 56, 16, t.dim);
-                if (cv.own) cv.target(1100, y, 452, 68, () => { settings.set('engine', k); return redraw(); }, 'eng-' + k);
+                const q = core.presetInfo(k), sel = k === core.preset(), y = 92 + i * 104;
+                cv.roundRect(1100, y, 452, 92, 14, sel ? withAlpha(t.accent, 0.3) : withAlpha('#ffffff', 0.05));
+                if (sel) cv.strokeRoundRect(1100, y, 452, 92, 14, 2, t.accent);
+                cv.text(q.title, 1124, y + 42, 28, t.text, { font: 'bold' });
+                cv.text(q.red ? q.sub + ' - ' + q.red + ' rpm' : q.sub, 1124, y + 72, 16, t.dim);
+                if (cv.own) cv.target(1100, y, 452, 92, () => { settings.set('engine', k); return redraw(); }, 'eng-' + k);
             });
-            // the sound engine (es-synth-<id>): which synthesizer plays; greyed = not in the installed service
-            const have = daemon.status && daemon.status.engines, se = core.soundEngine();
-            cv.text('SOUND ENGINE', 1100, 422, 15, t.dim, { font: 'bold', spacing: 1.5 });
-            const sw = (452 - 8 * (SOUND_ENGINES.length - 1)) / SOUND_ENGINES.length;
-            SOUND_ENGINES.forEach((x, i) => {
-                const there = !have || have.indexOf(x.id) >= 0;
-                G.button(cv, t, 1100 + i * (sw + 8), 432, sw, 48, x.title, there ? () => { settings.set('soundEngine', x.id); return redraw(); } : null,
-                    { primary: x.id === se, key: 'se-' + x.id, busy: !there });
-            });
-            const cur = SOUND_ENGINES.find((x) => x.id === se);
-            cv.text(cur.sub + (PRESETS[core.preset()].turbo || cur.realRpm ? ' - turbo ' + (settings.get('turbo') !== false ? 'on' : 'off') : ''), 1100, 502, 15, t.dim);
         }
 
         /* ---------- Sound page: sliders for the X settings ---------- */

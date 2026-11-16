@@ -2,7 +2,7 @@
   "id": "lfb_enginesound",
   "title": "Engine Sound",
   "description": "A synthesized engine sound (inline-6, V8, V10, V12, or bass for the diesel) on the car's speakers, following the car's real rpm, gear and load; exclusive or over the music",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "vendor": "loenne007",
   "license": "MIT",
   "loggingId": "LFES",
@@ -12,7 +12,7 @@
   ],
   "autostart": true,
   "requires": {
-    "lfb-enginesound": "1.0.0"
+    "lfb-enginesound": "1.1.0"
   },
   "signals": {
     "de.bmw.infotainment.vehicle.CDS": {
@@ -107,34 +107,46 @@
       "key": "soundEngine",
       "label": "Sound engine",
       "type": "choice",
-      "default": "pulse",
+      "default": "simulate",
       "options": [
         [
-          "pulse",
-          "Pulse"
+          "simulate",
+          "Simulate"
+        ],
+        [
+          "enhance",
+          "Enhance"
         ],
         [
           "waveguide",
-          "Waveguide"
+          "Waveguide (legacy)"
         ],
         [
-          "bass",
-          "Bass (Active Sound)"
+          "replica",
+          "Replica (legacy)"
         ]
       ],
       "aliases": {
         "a": "waveguide",
-        "b": "pulse",
-        "c": "pulse",
-        "d": "bass"
+        "b": "replica",
+        "c": "simulate",
+        "d": "enhance",
+        "pulse": "simulate",
+        "bass": "enhance"
       }
+    },
+    {
+      "key": "legacyEngines",
+      "label": "Legacy sound engines",
+      "type": "bool",
+      "default": false
     },
     {
       "key": "volume",
       "label": "Volume",
       "type": "number",
       "unit": "%",
-      "default": 60,
+      "default": 50,
       "steps": [
         10,
         20,
@@ -146,7 +158,8 @@
         80,
         90,
         100
-      ]
+      ],
+      "reset": 1
     },
     {
       "key": "sportOnly",

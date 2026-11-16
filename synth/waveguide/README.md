@@ -1,4 +1,4 @@
-# Waveguide sound engine (`es-synth-waveguide`)
+# Waveguide sound engine (`es-synth-waveguide`), legacy
 
 Engine_Sim's sound path rewritten in C99 for the 320d's iDrive 7: combustion
 events into delay-line waveguide pipes, muffler, airbox, a sub layer, a turbo

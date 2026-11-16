@@ -1,0 +1,68 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>replay</title>
+<!-- Replays a per-frame params dump from the C port (ES_DUMP_PARAMS) through the real Engine_Sim graph in an
+     OfflineAudioContext: identical params into _writeParams, so differences are purely the audio path. -->
+<script type="module">
+import { EngineSim, builtinPreset } from '../src/engine-sim.js';
+const SR = 48000;
+const ES_ID = { i6: 'i6', v8: 'v8cross', v10: 'v10', v12: 'v12' };
+const OURS = { i6: [700, 7000], v8: [650, 7200], v10: [900, 8250], v12: [700, 7500] };
+const NAMES = ['i6', 'v8', 'v10', 'v12'];
+const PH = ['', 'cut', 'open', 'sync', 'engage', 'lash', 'shuffle'];
+
+function wav32(L, R) {
+  const n = L.length, buf = new ArrayBuffer(44 + n * 8), v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 8, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 3, true); v.setUint16(22, 2, true);
+  v.setUint32(24, SR, true); v.setUint32(28, SR * 8, true); v.setUint16(32, 8, true);
+  v.setUint16(34, 32, true); w(36, 'data'); v.setUint32(40, n * 8, true);
+  for (let i = 0; i < n; i++) { v.setFloat32(44 + i * 8, L[i], true); v.setFloat32(48 + i * 8, R[i], true); }
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+window.replay = async (dumpText, seconds, volume) => {
+  const rows = dumpText.trim().split('\n').map((l) => l.trim().split(/\s+/).map(Number));
+  const sel = rows[0][1], turbo = rows[0][2];
+  const name = NAMES[sel], [idle, red] = OURS[name];
+  const ctx = new OfflineAudioContext({ numberOfChannels: 2, length: Math.round(SR * seconds), sampleRate: SR });
+  const realResume = ctx.resume.bind(ctx);
+  ctx.resume = async () => {};
+  const sim = new EngineSim(ctx, { engine: ES_ID[name], vehicle: 'sports', turbo: !!turbo, volume });
+  // our idle/redline (the C port's deviation), applied through a preset so every module is built with them
+  const pre = builtinPreset(ES_ID[name]);
+  pre.engine.idleRpm = idle; pre.engine.redlineRpm = red;
+  pre.turbo.enabled = turbo; pre.volume = volume;
+  sim.loadPreset(pre);
+  await sim.start();
+  sim.transmission.driveshaftScale = 1;   // the C port feeds propshaft rpm, as physics.js does
+  const mk = (r) => ({
+    now: r[0], dt: r[4], rpm: r[5], f0: r[6], rpmNorm: Math.min(1, Math.max(0, (r[5] - idle) / (red - idle))),
+    dRpm: r[7], throttle: r[8], load: r[9], overrun: r[10], torqueSign: r[11], gear: r[13], gearRatio: r[14],
+    speed: r[15], wheelRpm: r[16], clutchSlip: r[17], clutchEngaged: r[18], boost: r[19], shifting: !!r[20],
+    shiftPhase: PH[r[21]], limiter: r[22], gearbox: 'manual', evCut: r[23], evLash: r[24], evEngage: r[25],
+    evBov: r[26], evShiftDone: r[27], evPop: r[28], popIntensity: r[29],
+  });
+  // group frames by time (several can share a time, e.g. the immediate first write)
+  const groups = new Map();
+  for (const r of rows) {
+    const q = Math.round(r[0] * SR / 128);
+    if (!groups.has(q)) groups.set(q, []);
+    groups.get(q).push(r);
+  }
+  for (const [q, list] of groups) {
+    const t = q * 128 / SR;
+    if (t >= seconds) continue;
+    const apply = () => { for (const r of list) sim._writeParams(mk(r), !!r[3]); };
+    if (q === 0) apply();
+    else ctx.suspend(t).then(() => { apply(); realResume(); });
+  }
+  const buf = await ctx.startRendering();
+  return { wav: wav32(buf.getChannelData(0), buf.getChannelData(1)) };
+};
+window.ready = true;
+</script>

@@ -64,7 +64,7 @@ int main(void) {
     assert(!synth_control(&s, "P 2000 0 0 11 0"));
     assert(!synth_control(&s, "P 2000 0 0 1 0 junk"));
     assert(!synth_control(&s, "V nan"));
-    assert(!synth_control(&s, "V 2"));
+    assert(synth_control(&s, "V 2") && !synth_control(&s, "V 2.5"));   /* volume 0..2 */
     assert(!synth_control(&s, "X bass nan"));
     assert(!synth_control(&s, "X unknown 1"));
     assert(!synth_control(&s, "E v6"));

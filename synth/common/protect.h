@@ -1,11 +1,15 @@
 /* protect.h - speaker protection: the last stage of every sound engine, between its output and the device.
  *
  * Whatever an engine (or a sound setting) does, what reaches the car's amplifier is kept safe for its speakers:
+ *   0. the live gain: on the car (ALSA / raw output) the engine is raised by PROTECT_LIVE_GAIN_DB (10 dB, env
+ *      ES_LIVE_GAIN_DB 0..20 overrides) to the loudness of radio and music, so the car's volume knob can stay where
+ *      the radio is comfortable; WAV renders keep the engine's own level (ES_LIVE_GAIN=1 applies it there too)
  *   1. a 4th-order high-pass at 30 Hz: no DC, no infrasound, no woofer over-excursion
  *   2. a 2nd-order low-pass at 16 kHz: nothing harsh for the tweeters
- *   3. a bass limiter: the band below ~100 Hz (4th-order) is held under -8 dBFS (peak envelope), however much bass
+ *   3. a bass limiter: the band below ~150 Hz (4th-order detector) is held under -3 dBFS (peak envelope), however much bass
  *      the engine or the bass setting asks for
- *   4. a power limiter: the 3 s RMS is held under -14 dBFS (long full-power stretches are turned down slowly)
+ *   4. a power limiter: the 3 s RMS is held under -9 dBFS, about the level of mastered music (long full-power
+ *      stretches are turned down slowly)
  *   5. a look-ahead peak limiter (1 ms) at -1.5 dBFS, then a soft clip under -1 dBFS as the last resort
  *   6. a 60 ms fade-in at start, so the first block never clicks
  * Header only, C99, no allocation, a few dozen flops per frame. Engines include it from synth/common/ and call
@@ -15,10 +19,12 @@
 #define ES_PROTECT_H
 #include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define PROTECT_SR 48000.0
 #define PROTECT_LOOK 48 /* 1 ms look-ahead */
+#define PROTECT_LIVE_GAIN_DB 10.0
 
 typedef struct { float b0, b1, b2, a1, a2, z1[2], z2[2]; } ProtectBiquad;
 
@@ -30,6 +36,7 @@ typedef struct {
     float delay[PROTECT_LOOK][2];       /* look-ahead line */
     int dpos;
     long fade;                          /* frames into the fade-in */
+    float gain;                         /* the live gain (linear) */
 } Protect;
 
 /* RBJ cookbook biquad, normalised; type 0 = low-pass, 1 = high-pass */
@@ -54,15 +61,23 @@ static void protect_init(Protect *p) {
     protect_biquad(&p->hp1, 1, 30, 0.5411961);   /* 4th-order Butterworth: Q 0.541 and 1.307 */
     protect_biquad(&p->hp2, 1, 30, 1.3065630);
     protect_biquad(&p->lp, 0, 16000, 0.7071068);
-    protect_biquad(&p->bass1, 0, 100, 0.5411961);
-    protect_biquad(&p->bass2, 0, 100, 1.3065630);
-    p->bass_gain = p->pow_gain = p->pk_gain = 1;
+    protect_biquad(&p->bass1, 0, 150, 0.5411961);
+    protect_biquad(&p->bass2, 0, 150, 1.3065630);
+    p->bass_gain = p->pow_gain = p->pk_gain = p->gain = 1;
+}
+
+/* The live gain for car output: PROTECT_LIVE_GAIN_DB, or ES_LIVE_GAIN_DB (0..20 dB). */
+static void protect_live(Protect *p) {
+    const char *e = getenv("ES_LIVE_GAIN_DB");
+    double db = PROTECT_LIVE_GAIN_DB;
+    if (e) { double x = atof(e); if (x >= 0 && x <= 20) db = x; }
+    p->gain = (float)pow(10.0, db / 20.0);
 }
 
 /* the block in place: interleaved S16 stereo, n frames */
 static void protect_run(Protect *p, int16_t *buf, unsigned n) {
-    const float BASS_MAX = 0.398f;    /* -8 dBFS */
-    const float POW_MAX = 0.0398f;    /* (-14 dBFS)^2 */
+    const float BASS_MAX = 0.708f;    /* -3 dBFS */
+    const float POW_MAX = 0.1259f;    /* (-9 dBFS)^2 */
     const float PEAK_MAX = 0.841f;    /* -1.5 dBFS */
     const float pow_a = 1.f / (float)(3 * PROTECT_SR), env_rel = 1.f / (float)(0.25 * PROTECT_SR);
     unsigned i;
@@ -70,7 +85,7 @@ static void protect_run(Protect *p, int16_t *buf, unsigned n) {
     for (i = 0; i < n; i++) {
         float x[2], lo = 0, peak = 0, g, target;
         for (c = 0; c < 2; c++) {
-            float s = buf[2 * i + c] * (1.f / 32768.f);
+            float s = buf[2 * i + c] * (p->gain / 32768.f);
             s = protect_tick(&p->hp1, c, s);
             s = protect_tick(&p->hp2, c, s);
             s = protect_tick(&p->lp, c, s);
@@ -81,8 +96,9 @@ static void protect_run(Protect *p, int16_t *buf, unsigned n) {
         p->bass_env = lo > p->bass_env ? lo : p->bass_env + (lo - p->bass_env) * env_rel;
         target = p->bass_env > BASS_MAX ? BASS_MAX / p->bass_env : 1;
         p->bass_gain += (target - p->bass_gain) * (target < p->bass_gain ? 0.002f : 0.00005f);
-        /* power limiter: 3 s mean square, slow */
-        p->pow_ms += ((x[0] * x[0] + x[1] * x[1]) * 0.5f - p->pow_ms) * pow_a;
+        /* power limiter: 3 s mean square of the signal after the bass limiter (measured before it, the two would
+         * turn the same loudness down twice), slow */
+        p->pow_ms += ((x[0] * x[0] + x[1] * x[1]) * 0.5f * p->bass_gain * p->bass_gain - p->pow_ms) * pow_a;
         target = p->pow_ms > POW_MAX ? sqrtf(POW_MAX / p->pow_ms) : 1;
         p->pow_gain += (target - p->pow_gain) * 0.00006f;   /* ~0.35 s */
         g = p->bass_gain * p->pow_gain;

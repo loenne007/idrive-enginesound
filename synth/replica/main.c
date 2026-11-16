@@ -133,20 +133,21 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    if (!isfinite(volume) || volume < 0 || volume > 1 || !isfinite(demo) || demo < 0 || !isfinite(bench) ||
+    if (!isfinite(volume) || volume < 0 || volume > 2 || !isfinite(demo) || demo < 0 || !isfinite(bench) ||
         bench < 0)
         return 2;
     if (bench > 0) {
         volatile uint32_t checksum = 0;
         for (p = 0; p < NP; p++) {
             synth_init(&s, p, volume);
+            synth_control(&s, "T 1"); /* worst case: every preset with the turbo layer running */
             start = clock_s();
             for (frames = 0; frames < (uint64_t)(bench * SR); frames += BLOCK) {
                 demo_control(&s, (double)frames / SR, bench);
                 synth_render(&s, buf, BLOCK);
                 checksum += buf[0];
             }
-            printf("%s: %.1fx realtime (%.3fs for %.2fs audio)\n", presets[p].name,
+            printf("%s+turbo: %.1fx realtime (%.3fs for %.2fs audio)\n", presets[p].name,
                    bench / (clock_s() - start), clock_s() - start, bench);
         }
         return checksum == 123456789 ? 1 : 0;
@@ -192,6 +193,8 @@ int main(int argc, char **argv) {
     }
     alsa_out = !strncmp(out, "alsa:", 5);
     protect_init(&prot);
+    /* the car (ALSA, raw) gets the live gain: radio loudness; WAV renders keep the engine's level unless ES_LIVE_GAIN */
+    if (strncmp(out, "wav:", 4) || getenv("ES_LIVE_GAIN")) protect_live(&prot);
     synth_init(&s, p, volume);
     signal(SIGINT, handler);
     signal(SIGTERM, handler);

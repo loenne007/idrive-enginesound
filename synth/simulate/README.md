@@ -1,4 +1,4 @@
-# Pulse sound engine (`es-synth-pulse`), the default
+# Simulate sound engine (`es-synth-simulate`), the default
 
 Real-time procedural engine sound for the iDrive 7, C99. A pulse-and-pipe model built for three things:
 sound as close to a real engine heard from the cabin as an objective comparison can get, **instant** response
@@ -16,11 +16,11 @@ only adds the `ES_SOLO` measurement hook and runs `--bench` with the turbo on. T
 ```
 make host        # build/es-synth-host
 ./test.sh        # test_core, render samples, check.py, bench
-make car         # zig cc -target x86_64-linux-gnu.2.27, loader /lib/ld-linux-x86-64.so.2 -> ../../tool/lfb-enginesound/es-synth-pulse
+make car         # zig cc -target x86_64-linux-gnu.2.27, loader /lib/ld-linux-x86-64.so.2 -> ../../tool/lfb-enginesound/es-synth-simulate
 ./render_all.sh  # samples/{i6,v8,v10,v12}.wav: 40 s demo drives, mono (3.84 MB each)
 ```
 
-`make car` copies the stripped ELF to `tool/lfb-enginesound/es-synth-pulse` and runs `tools/check_glibc.py` (all symbol
+`make car` copies the stripped ELF to `tool/lfb-enginesound/es-synth-simulate` and runs `tools/check_glibc.py` (all symbol
 versions <= GLIBC_2.27 and the ELF interpreter is `/lib/ld-linux-x86-64.so.2`; the head unit has no `/lib64`).
 `check.py` needs only python3's standard library.
 
@@ -113,24 +113,24 @@ energy variation.
 |---|---|---|---|---|---|---|---|---|---|---|
 | i6-turbo ref | 254 | 18 | 75 | 4.3 | 2.1 | .29 | 331 | 13.3 | 12.2 % | .32 |
 | i6-turbo Waveguide | 199 | 23 | 75 | 2.1 | 0.3 | .32 | 229 | 11.7 | 11.5 % | .47 |
-| i6-turbo **Pulse** | **254** | 15 | 74 | 8.7 | 1.9 | .34 | 281 | 13.1 | 12.9 % | .53 |
+| i6-turbo **Simulate** | **254** | 15 | 74 | 8.7 | 1.9 | .34 | 281 | 13.1 | 12.9 % | .53 |
 | v8 (NA) ref | 214 | 30 | 39 | 29 | 1.4 | .35 | 283 | 17.6 | 16.6 % | .60 |
 | v8 (NA) Waveguide | 181 | 47 | 33 | 19 | 0.9 | .29 | 215 | 13.3 | 22.9 % | .32 |
-| v8 (NA) **Pulse** | **272** | 35 | 33 | 28 | 3.8 | .31 | 310 | 14.8 | 20.8 % | .25 |
+| v8 (NA) **Simulate** | **272** | 35 | 33 | 28 | 3.8 | .31 | 310 | 14.8 | 20.8 % | .25 |
 | v10 ref | 357 | 31 | 34 | 26 | 8.9 | .26 | 387 | 14.8 | 9.8 % | .17 |
 | v10 Waveguide | 367 | 14 | 41 | 41 | 4.4 | .30 | 363 | 13.6 | 13.1 % | .31 |
-| v10 **Pulse** | **392** | 8 | 42 | 43 | 6.6 | .37 | 413 | 13.9 | 14.1 % | .41 |
+| v10 **Simulate** | **392** | 8 | 42 | 43 | 6.6 | .37 | 413 | 13.9 | 14.1 % | .41 |
 | v12 ref | 354 | 35 | 31 | 28 | 5.8 | .19 | 423 | 20.3 | 21.0 % | -.29 |
 | v12 Waveguide | 372 | 20 | 32 | 43 | 4.8 | .23 | 409 | 13.3 | 15.6 % | -.12 |
-| v12 **Pulse** | **395** | 9 | 26 | 60 | 4.7 | .35 | 416 | 13.4 | 16.5 % | .28 |
+| v12 **Simulate** | **395** | 9 | 26 | 60 | 4.7 | .35 | 416 | 13.4 | 16.5 % | .28 |
 
-Read: Pulse's i6 and V8 match the references' spectral balance (centroid, mid band, high-rpm centroid) better
+Read: Simulate's i6 and V8 match the references' spectral balance (centroid, mid band, high-rpm centroid) better
 than Waveguide, which is 1-2 octaves darker in 300 Hz-3 kHz (it gets its mids only from its compressor's makeup).
 V10/V12 have less below 100 Hz than the references (Engine_Sim adds a strong sub layer and bass enhancer;
-in Pulse the V10/V12 low end is their real firing content plus a moderate sub) and are a bit more tonal (V12)
+in Simulate the V10/V12 low end is their real firing content plus a moderate sub) and are a bit more tonal (V12)
 than Engine_Sim's.
 1-6 kHz share at full throttle (i6-turbo/v8-turbo/v10/v12), 2000-3500 rpm: ref 0.03/0.12/1.0/0.9 %,
-Pulse 0.4/0.5/1.9/1.3 %; 5000-7000 rpm: ref 4.5/9.5/10.9/7.5 %, Pulse 2.9/2.1/8.9/7.1 % (the V8 is duller at high
+Simulate 0.4/0.5/1.9/1.3 %; 5000-7000 rpm: ref 4.5/9.5/10.9/7.5 %, Simulate 2.9/2.1/8.9/7.1 % (the V8 is duller at high
 rpm than Engine_Sim's turbo V8, whose turbo layer is loud).
 
 **Demo renders** (`samples/`): RMS -19.1..-20.1 dBFS (Waveguide: -19.4/-19.8), peaks -4.4..-5.5 dBFS, below-100 Hz
@@ -174,7 +174,7 @@ rasp only (through the exhaust), `5` the engine without the rasp, `6` the induct
 
 ## Credits and licenses
 
-The Pulse engine is new code. Its ideas and several constants come from these MIT-licensed projects:
+The Simulate engine is new code. Its ideas and several constants come from these MIT-licensed projects:
 
 - [YigitSalihEmecen/Engine_Sim](https://github.com/yigitsalihemecen/Engine_Sim) (MIT, Copyright (c) 2026
   Yigit Salih Emecen): the event-per-cylinder source with sub-sample onsets and cycle variation, crank-speed
