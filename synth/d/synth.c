@@ -21,6 +21,11 @@
 #define OUT_GAIN 5.1f /* calibration: demo RMS about -19 dBFS */
 #define FLOOR_LO 30.f /* orders fade out below FLOOR_HI .. FLOOR_LO Hz (no infrasound) */
 #define FLOOR_HI 40.f
+/* layer mask for measurements (cc -DES_LAYERS=...): 1 pulse noise, 2 turbo, 4 sigh, 8 pops, 16 phase jitter, 32 orders */
+#ifndef ES_LAYERS
+#define ES_LAYERS 63
+#endif
+#define LAYER(m) ((ES_LAYERS & (m)) ? 1.f : 0.f)
 
 enum { X_OFFGAS, X_TURBO, X_BOV, X_POPS, X_BASS, NX };
 static const char *const XNAME[NX] = {"offgas", "turbo", "bov", "pops", "bass"};
@@ -64,8 +69,8 @@ static void tables(void) {
     k_load = tau_k(.015f, CTRL);
     k_x = tau_k(.05f, CTRL);
     k_w = tau_k(.08f, CTRL);
-    k_spool_up = tau_k(.25f, CTRL);
-    k_spool_dn = tau_k(.5f, CTRL);
+    k_spool_up = tau_k(.5f, CTRL);
+    k_spool_dn = tau_k(.3f, CTRL);
     k_slow = 1 - expf(-2 * PI_F * 4.f * CTRL / SR); /* 4 Hz at control rate */
 }
 
@@ -92,14 +97,10 @@ void synth_init(Synth *s, int p, float vol) {
     s->shelf_db = -99;
     s->cab_fc = -1;
     bq_bandpass(&s->tex_bp, 400, .8f);
-    bq_lowpass(&s->tex_lp, 1400, .7f);
-    bq_bandpass(&s->wh_bp, 2500, 9);
-    bq_bandpass(&s->wh_bp2, 3750, 6);
-    bq_bandpass(&s->hiss_bp, 1600, .7f);
-    bq_bandpass(&s->bov_bp, 1500, 1.6f);
-    bq_lowpass(&s->bov_lp, 2800, .7f);
-    bq_bandpass(&s->pop_bp, 1300, 1.2f);
-    bq_lowpass(&s->pop_lp, 2400, .7f);
+    bq_lowpass(&s->tex_lp, 450, .7f);
+    bq_bandpass(&s->bov_bp, 1100, 1.2f);
+    bq_lowpass(&s->bov_lp, 1200, .7f);
+    bq_lowpass(&s->pop_lp, 700, .7f);
     s->pop_res_f = 120;
     s->pop_gap = 1;
 }
@@ -258,12 +259,12 @@ static void control(Synth *s) {
     s->wob2 += (s->wob - s->wob2) * k_slow;
     s->wob_depth = wobble * (.7f + .5f * (1 - w) + .5f * ov) * (1 - .5f * sstep(2500, 4300, rpm));
     /* common phase jitter, shaft radians (scaled by order through the harmonic number) */
-    s->jit += (gauss(&s->seed) * .03f - s->jit) * .25f;
-    /* noise texture on the firing pulses: brighter and louder under load, quiet on the overrun */
-    x = tex_db + 4 * clampf((rpm - 800) / 3500, 0, 1) + (1 - w) * (-7 + odb) - 4 * ov;
-    s->tex_lvl_t = REF * on * db2lin(x);
+    s->jit += (gauss(&s->seed) * .077f * LAYER(16) - s->jit) * .042f; /* ~10 Hz wide, ~0.011 rad */
+    /* a trace of low-passed texture on the firing pulses, under real load only (none at idle, cruise, coast) */
+    x = tex_db + 4 * clampf((rpm - 800) / 3500, 0, 1);
+    s->tex_lvl_t = REF * on * db2lin(x) * sstep(.35f, .9f, load);
     s->tex_sharp = w;
-    bq_bandpass(&s->tex_bp, 220 + 450 * w + .07f * rpm, .8f);
+    bq_bandpass(&s->tex_bp, 150 + 200 * w + .03f * rpm, .7f);
     /* cabin low-pass: muffled off the gas, opening under load; bass shelf: preset + X bass (about +-9 dB) */
     {
         float fc = clampf(lp_lo + (lp_hi - lp_lo) * w, 200, 900), db = bass_db + 9 * (s->x[X_BASS] - 1);
@@ -276,28 +277,29 @@ static void control(Synth *s) {
             s->shelf_db = db;
         }
     }
-    /* turbo: spool from load x rpm (250 ms up, 500 ms down), a band of noise for the whistle */
-    s->spool_t = load > 0 ? w * sstep(1100, 2400, rpm) : 0;
+    /* boost proxy: only real high load at real rpm (500 ms up, 300 ms down); time spent near full load */
+    s->spool_t = sstep(.6f, .95f, load) * sstep(1600, 2600, rpm);
     s->spool += (s->spool_t - s->spool) * (s->spool_t > s->spool ? k_spool_up : k_spool_dn);
+    s->boost_t = load > .8f && rpm > 1700 ? s->boost_t + dtc : fmaxf(0, s->boost_t - (load > .3f ? .5f : 2) * dtc);
+    /* turbo (T 1 + X turbo; off in D's own default): a faint tonal whistle at high boost only, no noise */
     {
-        float sp = s->spool, lvl = s->turbo ? s->x[X_TURBO] : 0;
-        s->wh_lvl = REF * on * db2lin(turbo_db) * lvl * sp * sqrtf(sp);
-        s->wh_fc = 1900 + 2300 * sp * (.55f + .45f * clampf(rpm / 4300, 0, 1.2f));
-        if (s->wh_lvl > 1e-6f) {
-            bq_bandpass(&s->wh_bp, s->wh_fc, 9);
-            bq_bandpass(&s->wh_bp2, s->wh_fc * 1.5f, 7);
-        }
+        float lvl = s->turbo ? s->x[X_TURBO] : 0;
+        s->wh_lvl = REF * on * db2lin(turbo_db) * lvl * sstep(.55f, .95f, s->spool);
+        s->wh_fc = 2300 + 1500 * s->spool * clampf(rpm / 4300, .4f, 1.1f);
     }
-    /* recirculation sigh: a quick lift (throttle peak of the last ~150 ms high, now closed) after boost */
+    /* recirculation sigh: only a quick pedal lift (peak of the last ~150 ms above 70 %, now under 10 %) after
+     * at least 0.5 s near full load; ~200 ms, low-passed, 3 s cool-down */
     s->thr_peak = fmaxf(s->throttle, s->thr_peak * (1 - tau_k(.15f, CTRL)));
     s->bov_cool -= dtc;
-    if (s->bov_cool <= 0 && s->spool > .35f && s->throttle < .12f && s->thr_peak > .55f && s->turbo) {
-        s->bov_amp = REF * db2lin(bov_db) * s->spool;
+    if (s->bov_cool <= 0 && s->boost_t > .5f && s->throttle < .1f && s->thr_peak > .7f && load < .1f) {
+        s->bov_amp = REF * on * db2lin(bov_db) * s->spool;
         s->bov_env = 1;
-        s->bov_cool = 1.2f;
+        s->bov_att = 0;
+        s->bov_cool = 3;
+        s->boost_t = 0;
     }
-    s->bov_env *= 1 - tau_k(.2f, CTRL);
-    if (s->bov_env > 1e-4f) bq_bandpass(&s->bov_bp, 650 + 1100 * s->bov_env, 1.6f);
+    s->bov_env *= 1 - tau_k(.06f, CTRL);
+    if (s->bov_env > 1e-4f) bq_bandpass(&s->bov_bp, 600 + 500 * s->bov_env, 1.2f);
     /* overrun burble / crackle: armed by sustained positive load, fired by a genuine lift (pedal closed,
      * torque negative for 60 ms, not inside a gear change), lasting under a second */
     s->hold -= dtc;
@@ -394,37 +396,45 @@ void synth_render(Synth *s, int16_t *out, unsigned frames) {
                 if (rnd(&s->seed) * .5f + .5f < s->pop_win / fire_hz) {
                     s->pop_gap = 0;
                     s->pop_env = .55f + .45f * (rnd(&s->seed) * .5f + .5f);
-                    s->pop_cr = s->pop_env * (rnd(&s->seed) * .5f + .5f);
+                    s->pop_att = 0;
+                    s->pop_ph = 0;
                     s->pop_res_f = 85 + 70 * (rnd(&s->seed) * .5f + .5f);
-                    bq_bandpass(&s->pop_res, s->pop_res_f, 2.5f);
                 }
             }
         }
         /* the order bank: integer orders + lumped half orders, per-firing irregularity */
-        y = (acc_e + acc_o * fmaxf(.2f, 1 + s->wob_depth * s->wob2)) * am;
+        y = (acc_e + acc_o * fmaxf(.2f, 1 + s->wob_depth * s->wob2)) * am * LAYER(32);
         /* noise riding on the firing pulses */
         s->tex_lvl += (s->tex_lvl_t - s->tex_lvl) * .002f;
-        tex = bq(&s->tex_bp, rnd(&s->seed)) * env * s->tex_lvl * 3.f;
-        y += tex;
+        if (s->tex_lvl > 1e-7f) {
+            tex = bq(&s->tex_lp, bq(&s->tex_bp, rnd(&s->seed))) * env * s->tex_lvl * 3.f * LAYER(1);
+            y += tex;
+        }
         /* cabin: high-pass, bass shelf, low-pass */
         y = bq(&s->cab[0], bq(&s->shelf, bq(&s->hp, y)));
-        /* turbo whistle and hiss */
-        if (s->wh_lvl > 1e-6f) {
-            float n = rnd(&s->seed);
-            y += s->wh_lvl * (6.f * bq(&s->wh_bp, n) + 2.5f * bq(&s->wh_bp2, n) + 1.2f * s->spool * bq(&s->hiss_bp, n));
+        /* turbo whistle: a quiet sine, its pitch with the boost, a slow wander; faded in and out by wh_g */
+        s->wh_g += (s->wh_lvl - s->wh_g) * .0005f;
+        if (s->wh_g > 1e-7f) {
+            s->wh_ph += s->wh_fc * (1 + .004f * s->wob2) * (1.f / SR);
+            s->wh_ph -= (float)(int)s->wh_ph;
+            y += LAYER(2) * s->wh_g * sinf(6.2831853f * s->wh_ph);
         }
-        /* recirculation sigh */
+        /* recirculation sigh: 15 ms rise, ~60 ms decay, a falling band under 1.1 kHz, low-passed */
         if (s->bov_env > 1e-4f) {
-            float a = s->bov_env * (1 - s->bov_env) * 4 * s->bov_amp * (s->x[X_BOV]);
-            y += bq(&s->bov_lp, bq(&s->bov_bp, rnd(&s->seed))) * a * 3.f;
+            float a;
+            s->bov_att += (1 - s->bov_att) * .0014f;
+            a = s->bov_env * s->bov_att * s->bov_amp * s->x[X_BOV];
+            y += bq(&s->bov_lp, bq(&s->bov_bp, rnd(&s->seed))) * a * 3.f * LAYER(4);
         }
-        /* overrun burble / crackle: a damped low thump plus a short band of crackle */
-        if (s->pop_env > 1e-4f || s->pop_cr > 1e-4f) {
-            float n = rnd(&s->seed), th = bq(&s->pop_res, n * s->pop_env) * 14.f,
-                  cr2 = bq(&s->pop_bp, n * s->pop_cr) * 2.f;
-            y += bq(&s->pop_lp, th + cr2) * s->pop_amp;
+        /* overrun burble: a damped low sine thump (85-155 Hz, 3 ms rise, ~28 ms decay) with a little rumble */
+        if (s->pop_env > 1e-4f) {
+            float th;
+            s->pop_att += (1 - s->pop_att) * .007f;
+            s->pop_ph += s->pop_res_f * (1.f / SR);
+            s->pop_ph -= (float)(int)s->pop_ph;
+            th = sinf(6.2831853f * s->pop_ph) * (1 + .35f * rnd(&s->seed));
+            y += bq(&s->pop_lp, th * s->pop_env * s->pop_att) * s->pop_amp * .35f * LAYER(8);
             s->pop_env *= .99925f; /* ~28 ms */
-            s->pop_cr *= .9975f;   /* ~8 ms */
         } else
             bq(&s->pop_lp, 0);
         /* output: volume, gate (mute, stale telemetry, quit), soft ceiling -3 dBFS */

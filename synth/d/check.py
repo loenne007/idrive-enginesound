@@ -196,29 +196,56 @@ for name in ids:
           f'350 Hz+ share {100 * br[.05]:.1f} -> {100 * br[1]:.1f} %')
 
 # ---- X settings ----
-def lift_drive(xs):
-    # full load at 3500 rpm, a lift at 2.5 s, coasting; X lines at t = 0
-    lines = [f'0 X {k} {v}' for k, v in xs]
+def lift_drive(xs, turbo=False):
+    # full load at 3300 rpm, a lift at 2.5 s, coasting at the same rpm (clean order lines); X lines at t = 0
+    lines = (['0 T 1'] if turbo else []) + [f'0 X {k} {v}' for k, v in xs]
     for i in range(101):
         t = i / 20
-        if t < 2.5: lines.append(f'{t} P 3500 0.95 1 3 70')
-        else: lines.append(f'{t} P {3500 - 400 * (t - 2.5):.0f} -0.6 0 3 70')
+        if t < 2.5: lines.append(f'{t} P 3300 0.95 1 3 70')
+        else: lines.append(f'{t} P 3300 -0.6 0 3 70')
     return lines
 
+
+def non_tonal(s, rpm, lo, hi, n=32768):
+    # energy between lo and hi Hz away from every half-order line of the bank (+-4 Hz)
+    tot = 0
+    for k in range(int(lo * n / SR), int(hi * n / SR)):
+        f = k * SR / n
+        q = f / (rpm / 120)
+        if q > 25.5 or abs(q - round(q)) * rpm / 120 > 4: tot += s[k]  # the bank ends at order 12
+    return tot
+
+
+# idle, cruise and coasting, every layer at its maximum (T 1, X 2): nothing above 1.5 kHz (>= 35 dB under the
+# total) and no layer active (non-tonal energy above 500 Hz >= 50 dB under the total)
+for name in ids:
+    out = []
+    for what, rpm, load, thr, g in (('idle', 800, .05, 0, 1), ('cruise', 2000, .2, .2, 6), ('coast', 2500, -.5, 0, 5)):
+        a = render(name, f'quiet-{what}', ['0 T 1', '0 X turbo 2', '0 X bov 2', '0 X pops 2'] + steady(rpm, load, thr, g))
+        s = spectrum(a, 2)
+        tot = energy(s, 1, 20000)
+        hi = 10 * math.log10(energy(s, 1500, 20000) / tot)
+        nt = 10 * math.log10(non_tonal(s, rpm, 500, 20000) / tot)
+        assert hi <= -35, (name, what, 'energy above 1.5 kHz', hi)
+        assert nt <= -50, (name, what, 'a noise layer is active', nt)
+        out.append(f'{what} >1.5 kHz {hi:.0f} dB, non-tonal >500 Hz {nt:.0f} dB')
+    print(f'{name}: ' + '; '.join(out))
+
 for name in ('v10', 'i6'):
-    full = render(name, 'x-default', lift_drive([]))
-    s_def = spectrum(full, 1.5)
-    s_zero = spectrum(render(name, 'x-turbo0', lift_drive([('turbo', 0)])), 1.5)
-    t_def, t_zero = energy(s_def, 2000, 7000), energy(s_zero, 2000, 7000)
-    assert t_def > 30 * t_zero, (name, 'X turbo 0 does not remove the whistle', t_def, t_zero)
-    # bov and pops: the band 500-4000 Hz in the second after the lift
-    def band(a):
-        return energy(spectrum(a, 2.5, 32768), 500, 4000)
-    b_def = band(full)
-    b_none = band(render(name, 'x-none', lift_drive([('turbo', 0), ('bov', 0), ('pops', 0)])))
-    b_bov = band(render(name, 'x-bov', lift_drive([('turbo', 0), ('pops', 0)])))
-    b_pop = band(render(name, 'x-pops', lift_drive([('turbo', 0), ('bov', 0), ('pops', 2)])))
-    assert b_bov > 1.3 * b_none and b_pop > 1.3 * b_none, (name, 'bov / pops missing', b_none, b_bov, b_pop)
+    s_def = spectrum(render(name, 'x-default', lift_drive([])), 1.5)
+    s_on = spectrum(render(name, 'x-turbo1', lift_drive([], True)), 1.5)
+    s_zero = spectrum(render(name, 'x-turbo0', lift_drive([('turbo', 0)], True)), 1.5)
+    t_def, t_on, t_zero = energy(s_def, 2000, 7000), energy(s_on, 2000, 7000), energy(s_zero, 2000, 7000)
+    assert t_on > 1000 * t_zero and t_def < 2 * t_zero, (name, 'turbo whistle: T 1 on, default / X turbo 0 off', t_def, t_on, t_zero)
+    # sigh: non-tonal 300-1500 Hz in the 0.68 s after the lift; pops (X pops 2): non-tonal 60-700 Hz
+    def after(xs):
+        return spectrum(render(name, 'x-' + '-'.join(f'{k}{v}' for k, v in xs), lift_drive(xs)), 2.5)
+    s_none = after([('bov', 0), ('pops', 0)])
+    s_bov = after([('pops', 0)])
+    s_pop = after([('bov', 0), ('pops', 2)])
+    b_none, b_bov = non_tonal(s_none, 3300, 300, 1500), non_tonal(s_bov, 3300, 300, 1500)
+    p_none, p_pop = non_tonal(s_none, 3300, 60, 700), non_tonal(s_pop, 3300, 60, 700)
+    assert b_bov > 1.6 * b_none and p_pop > 1.6 * p_none, (name, 'bov / pops missing', b_none, b_bov, p_none, p_pop)
     lo = {}
     for bass in (0, 1, 2):
         s = spectrum(render(name, f'x-bass{bass}', [f'0 X bass {bass}'] + steady(2000, .5, .5)), 2)
@@ -229,9 +256,9 @@ for name in ('v10', 'i6'):
         og[v] = (db(level(render(name, f'x-off{v}', [f'0 X offgas {v}'] + steady(2500, 0, 0))[SR:])),
                  db(level(render(name, f'x-offfull{v}', [f'0 X offgas {v}'] + steady(2500, 1, 1))[SR:])))
     assert 4 < og[1][0] - og[.5][0] < 8 and abs(og[1][1] - og[.5][1]) < .5, (name, 'offgas', og)
-    print(f'{name}: X turbo 0 whistle band {10 * math.log10(t_zero / t_def):.0f} dB; after the lift 0.5-4 kHz '
-          f'none/bov/pops 2/all {10 * math.log10(b_none):.1f}/{10 * math.log10(b_bov):.1f}/{10 * math.log10(b_pop):.1f}/'
-          f'{10 * math.log10(b_def):.1f} dB; bass 0/1/2 low-vs-mid {lo[0]:.1f}/{lo[1]:.1f}/{lo[2]:.1f} dB; '
+    print(f'{name}: whistle 2-7 kHz T 1 vs default {10 * math.log10(t_on / t_def):.0f} dB, X turbo 0 '
+          f'{10 * math.log10(t_zero / t_on):.0f} dB; after the lift non-tonal: sigh {10 * math.log10(b_bov / b_none):+.1f} dB '
+          f'(0.3-1.5 kHz), pops 2 {10 * math.log10(p_pop / p_none):+.1f} dB (60-700 Hz); bass 0/1/2 low-vs-mid {lo[0]:.1f}/{lo[1]:.1f}/{lo[2]:.1f} dB; '
           f'offgas 0.5: off-gas {og[.5][0] - og[1][0]:+.1f} dB, full load {og[.5][1] - og[1][1]:+.1f} dB')
 
 # ---- transitions: preset switching, mute, X changes, shifts, malformed lines, stale watchdog, quit ----

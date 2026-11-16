@@ -26,7 +26,7 @@ static void finite(void) {
     for (k = 0; k < NH; k++) assert(isfinite(s.g[k]) && isfinite(s.gt[k]) && s.g[k] < 1);
     assert(isfinite(s.f6.am) && isfinite(s.f8.am) && isfinite(s.wob2) && isfinite(s.jit));
     assert(isfinite(s.tex_bp.z1) && isfinite(s.cab[0].z1) && isfinite(s.shelf.z1) && isfinite(s.hp.z1));
-    assert(isfinite(s.wh_bp.z1) && isfinite(s.bov_bp.z1) && isfinite(s.pop_res.z1) && isfinite(s.pop_lp.z1));
+    assert(isfinite(s.wh_g) && isfinite(s.wh_ph) && isfinite(s.bov_bp.z1) && isfinite(s.pop_lp.z1) && isfinite(s.tex_lp.z1));
 }
 
 /* a lift-off from boost: 2.5 s full load at 3500 rpm, then the pedal closes and the engine coasts; returns the
@@ -34,6 +34,7 @@ static void finite(void) {
 static void lift(const char *x1, const char *x2, const char *x3, float *pop, float *bov, float *wh) {
     int i;
     synth_init(&s, 2, 1);
+    assert(synth_control(&s, "T 1"));
     if (x1) assert(synth_control(&s, x1));
     if (x2) assert(synth_control(&s, x2));
     if (x3) assert(synth_control(&s, x3));
@@ -49,7 +50,7 @@ static void lift(const char *x1, const char *x2, const char *x3, float *pop, flo
             *pop = fmaxf(*pop, s.pop_env * s.pop_amp);
             *bov = fmaxf(*bov, s.bov_env * s.bov_amp * s.x[2] /* bov */);
         }
-        if (t > 1.5 && t < 2.5) *wh = fmaxf(*wh, s.wh_lvl);
+        if (t > 1.5 && t < 2.5) *wh = fmaxf(*wh, s.wh_g);
     }
 }
 
@@ -152,7 +153,20 @@ int main(void) {
     lift("X pops 0", "X bov 0", "X turbo 0", &pop, &bov, &wh);
     assert(pop == 0 && bov == 0 && wh == 0);
     lift("T 0", 0, 0, &pop, &bov, &wh);
-    assert(wh == 0 && bov == 0 && pop > 0);
+    assert(wh == 0 && bov > 0 && pop > 0);
+    /* idle, cruise, coasting (and turbo on): no layer but the orders is active */
+    {
+        static const float ST[3][5] = {{800, .05f, 0, 1, 0}, {2000, .2f, .2f, 6, 80}, {2500, -.5f, 0, 5, 80}};
+        for (k = 0; k < 3; k++) {
+            synth_init(&s, 3, 1);
+            assert(synth_control(&s, "T 1") && synth_control(&s, "X pops 2") && synth_control(&s, "X bov 2"));
+            for (i = 0; i < 600; i++) {
+                send("P %.1f %.2f %.2f %d %.1f", ST[k][0], ST[k][1], ST[k][2], (int)ST[k][3], ST[k][4]);
+                synth_render(&s, out, BLOCK);
+                assert(s.tex_lvl == 0 && s.wh_g == 0 && s.bov_env == 0 && s.pop_env == 0);
+            }
+        }
+    }
     /* a shift during the lift does not start a pop window */
     synth_init(&s, 3, 1);
     for (i = 0; i < 600; i++) {
@@ -163,6 +177,6 @@ int main(void) {
         synth_render(&s, out, BLOCK);
         assert(s.pop_env == 0);
     }
-    puts("PASS: finite DSP states, -3 dBFS ceiling, rpm response, engine off, X turbo/bov/pops off, no shift pops");
+    puts("PASS: finite DSP states, -3 dBFS ceiling, rpm response, engine off, X turbo/bov/pops off, no shift pops, no layer at idle/cruise/coast");
     return 0;
 }

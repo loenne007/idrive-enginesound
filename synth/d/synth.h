@@ -83,14 +83,13 @@ typedef struct {
     float shelf_db, cab_fc, out_gain, out_gain_t;
     /* turbo */
     float spool, spool_t;
-    Biquad wh_bp, wh_bp2, hiss_bp;
-    float wh_lvl, wh_fc;
+    float wh_lvl, wh_g, wh_fc, wh_ph, boost_t;
     /* recirculation sigh */
     Biquad bov_bp, bov_lp;
-    float bov_env, bov_amp, bov_fc, thr_peak, bov_cool;
+    float bov_env, bov_att, bov_amp, thr_peak, bov_cool;
     /* overrun burble / crackle */
-    Biquad pop_res, pop_bp, pop_lp;
-    float pop_env, pop_cr, pop_amp, pop_win, pop_age, pop_gap, pop_res_f, load_avg, ov_t;
+    Biquad pop_lp;
+    float pop_env, pop_att, pop_ph, pop_amp, pop_win, pop_age, pop_gap, pop_res_f, load_avg, ov_t;
     int pop_armed;
     float hold;          /* hold-off after a gear change, s */
     uint32_t seed;
