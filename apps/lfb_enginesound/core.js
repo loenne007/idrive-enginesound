@@ -145,11 +145,12 @@ class Core {
         return SOUND_ENGINES.filter((x) => !x.legacy || all || x.id === cur);
     }
 
-    /** The volume setting (10-100 %) as the synth's gain (V 0..2): 50 % = 0.9, 100 % = 1.8 (about +6 dB over the
-     * loudest of earlier versions; the speaker protection keeps the output safe). */
+    /** The volume setting (10-100 %) as the synth's gain (V 0..2): linear up to 50 % = 0.9 (about the 90 % of
+     * versions before 1.1), then gently up to 100 % = 1.4 (+4 dB, where the speaker protection starts to hold the
+     * loudest full-load passages). */
     synthVolume() {
-        const v = Number(this.settings.get('volume'));
-        return clamp((isFinite(v) && v > 0 ? v : 50) / 100 * 1.8, 0, 2);
+        const s = Number(this.settings.get('volume')), v = isFinite(s) && s > 0 ? clamp(s, 0, 100) : 50;
+        return v <= 50 ? v / 50 * 0.9 : 0.9 + (v - 50) / 50 * 0.5;
     }
 
     /** The preset's title / subtitle / redline as shown: the sound engine's own names where it has them (Bass). */

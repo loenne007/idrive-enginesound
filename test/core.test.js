@@ -70,10 +70,11 @@ function make(over) {
     assert.deepStrictEqual(make({ legacyEngines: true }).core.soundEngines().map((x) => x.id), ['simulate', 'enhance', 'waveguide', 'replica']);
     assert.deepStrictEqual(make({ soundEngine: 'replica' }).core.soundEngines().map((x) => x.id), ['simulate', 'enhance', 'replica']);
 }
-// volume: 10-100 % -> V 0.18-1.8, 50 % = 0.9 (about the 90 % of earlier versions)
+// volume: 10-100 % -> V 0.18-1.4, 50 % = 0.9 (about the 90 % of earlier versions)
 {
     assert.strictEqual(make({ volume: 50 }).core.synthVolume().toFixed(2), '0.90');
-    assert.strictEqual(make({ volume: 100 }).core.synthVolume().toFixed(2), '1.80');
+    assert.strictEqual(make({ volume: 100 }).core.synthVolume().toFixed(2), '1.40');
+    assert.strictEqual(make({ volume: 10 }).core.synthVolume().toFixed(2), '0.18');
     assert.strictEqual(make({ volume: undefined }).core.synthVolume().toFixed(2), '0.90');
     const v = require('../apps/lfb_enginesound/app.json').settings.find((s) => s.key === 'volume');
     assert.strictEqual(v.default, 50);

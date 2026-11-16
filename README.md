@@ -98,10 +98,10 @@ available, and only while it plays; leftovers of a crash or a power-off are remo
 
 ## Speaker protection
 
-The last stage of every sound engine (`synth/common/protect.h`). In the car it first raises the engine by 10 dB to
+The last stage of every sound engine (`synth/common/protect.h`). In the car it first raises the engine by 6 dB to
 the loudness of radio and music, so the volume knob can stay where the radio is comfortable (and the radio isn't
 deafening when the engine sound stops). Then: no DC or infrasound (30 Hz high-pass), nothing above 16 kHz, the bass
-below ~150 Hz held under -3 dBFS, the long-term power held under -9 dBFS RMS (about mastered music), peaks under
+below ~150 Hz held under -3 dBFS, the long-term power held under -8 dBFS RMS (loud mastered music), peaks under
 -1 dBFS, and a fade-in at start. `tools/add_protect.py` puts it into a new engine; `make -C synth test` tests it.
 
 ## Settings
@@ -112,7 +112,7 @@ below ~150 Hz held under -3 dBFS, the long-term power held under -9 dBFS RMS (ab
 | Engine | inline-6, V8, V10, V12 (with Enhance: B57 straight-6, V8 TDI, V6 TDI, V6 TDI Sport) |
 | Sound engine | Simulate, Enhance (the legacy Waveguide, Replica with *Legacy sound engines*) |
 | Legacy sound engines | offers Waveguide and Replica too |
-| Volume | 10–100 %, default 50 %; the car's own volume knob applies on top. 50 % is about 90 % of versions before 1.1, 100 % about 6 dB more |
+| Volume | 10–100 %, default 50 %; the car's own volume knob applies on top. 50 % is the 90 % of versions before 1.1 (plus the 6 dB above), 100 % about 4 dB more |
 | Only in Sport mode | plays only while the driving mode is Sport |
 | Play over music (mix) | the mix route instead of the exclusive one (above) |
 | Turbo sound | the turbo whistle and blow-off of the turbo presets |

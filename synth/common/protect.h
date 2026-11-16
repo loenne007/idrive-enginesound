@@ -1,14 +1,14 @@
 /* protect.h - speaker protection: the last stage of every sound engine, between its output and the device.
  *
  * Whatever an engine (or a sound setting) does, what reaches the car's amplifier is kept safe for its speakers:
- *   0. the live gain: on the car (ALSA / raw output) the engine is raised by PROTECT_LIVE_GAIN_DB (10 dB, env
+ *   0. the live gain: on the car (ALSA / raw output) the engine is raised by PROTECT_LIVE_GAIN_DB (6 dB, env
  *      ES_LIVE_GAIN_DB 0..20 overrides) to the loudness of radio and music, so the car's volume knob can stay where
  *      the radio is comfortable; WAV renders keep the engine's own level (ES_LIVE_GAIN=1 applies it there too)
  *   1. a 4th-order high-pass at 30 Hz: no DC, no infrasound, no woofer over-excursion
  *   2. a 2nd-order low-pass at 16 kHz: nothing harsh for the tweeters
  *   3. a bass limiter: the band below ~150 Hz (4th-order detector) is held under -3 dBFS (peak envelope), however much bass
  *      the engine or the bass setting asks for
- *   4. a power limiter: the 3 s RMS is held under -9 dBFS, about the level of mastered music (long full-power
+ *   4. a power limiter: the 3 s RMS is held under -8 dBFS, the level of loud mastered music (long full-power
  *      stretches are turned down slowly)
  *   5. a look-ahead peak limiter (1 ms) at -1.5 dBFS, then a soft clip under -1 dBFS as the last resort
  *   6. a 60 ms fade-in at start, so the first block never clicks
@@ -24,7 +24,9 @@
 
 #define PROTECT_SR 48000.0
 #define PROTECT_LOOK 48 /* 1 ms look-ahead */
-#define PROTECT_LIVE_GAIN_DB 10.0
+/* 6 dB: an engine's full load (about -15.5 dBFS RMS, peaks -5 at the default volume) lands just under the limiters
+ * below, so they stay a safety net: with more, full load sat on the power limiter and the level no longer rose with rpm */
+#define PROTECT_LIVE_GAIN_DB 6.0
 
 typedef struct { float b0, b1, b2, a1, a2, z1[2], z2[2]; } ProtectBiquad;
 
@@ -77,7 +79,7 @@ static void protect_live(Protect *p) {
 /* the block in place: interleaved S16 stereo, n frames */
 static void protect_run(Protect *p, int16_t *buf, unsigned n) {
     const float BASS_MAX = 0.708f;    /* -3 dBFS */
-    const float POW_MAX = 0.1259f;    /* (-9 dBFS)^2 */
+    const float POW_MAX = 0.1585f;    /* (-8 dBFS)^2 */
     const float PEAK_MAX = 0.841f;    /* -1.5 dBFS */
     const float pow_a = 1.f / (float)(3 * PROTECT_SR), env_rel = 1.f / (float)(0.25 * PROTECT_SR);
     unsigned i;

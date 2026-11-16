@@ -30,8 +30,8 @@ int main(void) {
     run("DC 0.9", dc_, &pk, &rms, &dc);           check("DC removed", fabs(dc) < 0.001 && rms < -60);
     run("10 Hz full scale", infra, &pk, &rms, &dc); check("infrasound cut (>= 24 dB down)", rms < -3 - 24);
     run("45+90 Hz, full scale", bass, &pk, &rms, &dc); check("bass held at -3 dBFS peak (0.5 dB detector tolerance)", pk < -2.5);
-    run("220 Hz, clipped, 3 Hz AM", loud, &pk, &rms, &dc); check("peak <= -1 dBFS", pk <= -1.0); check("power <= -8 dBFS RMS", rms <= -8);
-    run("white noise full scale", noise, &pk, &rms, &dc); check("noise peak <= -1 dBFS", pk <= -1.0); check("noise power <= -8 dBFS", rms <= -8);
+    run("220 Hz, clipped, 3 Hz AM", loud, &pk, &rms, &dc); check("peak <= -1 dBFS", pk <= -1.0); check("power <= -7 dBFS RMS", rms <= -7);
+    run("white noise full scale", noise, &pk, &rms, &dc); check("noise peak <= -1 dBFS", pk <= -1.0); check("noise power <= -7 dBFS", rms <= -7);
     run("full-scale step", step, &pk, &rms, &dc);   check("step: no DC left", fabs(dc) < 0.001);
     return fail;
 }
