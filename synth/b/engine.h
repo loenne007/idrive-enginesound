@@ -28,6 +28,8 @@ typedef struct {
     float gearRatio, speed, wheelRpm, clutchSlip, clutchEngaged, boost;
     int shifting, phase, limiter;
     float evCut, evLash, evEngage, evBov, evShiftDone, evPop, popIntensity;
+    int noBark; /* a gearshift's torque dip/recovery is not the driver stabbing the throttle */
+    float xturbo, xbov, xpops; /* X settings (1 = default) */
 } Params;
 
 /* ---- combustion-worklet.js ---- */
@@ -139,7 +141,7 @@ typedef struct {
     SP whineF, wd1, wd2, whineDrive, shaftF, shaftDepth, grainDepth, whineGain, hissGain, hissGrain, whineNoiseGain,
         airflowGain, wgF, wgLevel, wgGrain, hiF, hiGain, hiGrain, hiWander, buzzF, buzzGain, surgeF, surgeJitter,
         whooshGain, whooshGrain, surgeBodyLvl, surgeEdgeLvl, surgeChirp, fwF, hiSurgeLvl, hiChirp, hiChirpN, out,
-        surgeSend;
+        surgeSend, audible, bovx;
     WS whineShaper, wgShaper, surgeShaper;
     BQN airLP, airShelf, whineBP, grainBP, hissBP, whineNoiseBP, airflowHP, airflowLP, wgBP, buzzBP, bovHissHP,
         surgeLP, whooshBP, surgeBody, fwBP, surgeEdge;
@@ -181,7 +183,7 @@ typedef struct {
     Trans tr;
     Turbo tu;
     TBank tb;
-    SP trem, turbineShelfG, intakeTrim;
+    SP trem, turbineShelfG, intakeTrim, popx;
     BQN turbineShelf;
     float popSend;
 } Voice;
@@ -200,7 +202,7 @@ float voice_rpmnorm(const Preset *p, float rpm);
 
 /* shared output stage */
 typedef struct {
-    BQN infra[2], blp1, blp2, bhp, blp3, rumble, body, presence, airCut, cabinLP, air, revHP, revDamp, tilt;
+    BQN bass, infra[2], blp1, blp2, bhp, blp3, rumble, body, presence, airCut, cabinLP, air, revHP, revDamp, tilt;
     WS bassWS, safety[2];
     CONV conv;
     DL sdl;

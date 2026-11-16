@@ -27,12 +27,15 @@ int main(void) {
         synth_init(&s, p, 1);
         assert(!synth_control(&s, "P nan 0 0 1 0"));
         assert(!synth_control(&s, "V nan"));
+        assert(!synth_control(&s, "X unknown 1"));
+        assert(!synth_control(&s, "X bass nan"));
         for (i = 0; i < 3000; i++) {
             if (i % 4 == 0) {
                 snprintf(line, sizeof(line), "P %d %f %f %d 60", i % 400 < 200 ? 0 : 10000, (i % 100) / 50. - 1,
                          (i % 70) / 69., 1 + (i / 50) % 8);
                 assert(synth_control(&s, line));
             }
+            if (i % 700 == 350) assert(synth_control(&s, (i / 700) % 2 ? "X bass 2" : "X pops 0"));
             if (i % 300 == 150) assert(synth_control(&s, (i / 300) % 2 ? "S 3 4" : "S 4 3"));
             if (i % 500 == 250) assert(synth_control(&s, (i / 500) % 2 ? "T 0" : "T 1"));
             if (i % 900 == 450) {

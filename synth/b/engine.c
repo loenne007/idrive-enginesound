@@ -852,6 +852,19 @@ static void trans_run(Trans *t, float *out) {
 #define TURBO_AIR_HZ 3800
 #define TURBO_AIR_DB -5.5f
 #define TURBO_WHINE_MAX_HZ 1150
+/* Owner's taste for this car (deviation from Engine_Sim, whose turbo is a showpiece): the turbo is a faint
+ * background layer that only comes up near full boost, and the BMW recirculating diverter valve makes a short soft
+ * whoosh with no compressor flutter. TURBO_TRIM scales whistle/spool/rush at full spool (audibility ramps in with
+ * spool from TURBO_ONSET), BOV_TRIM the blow-off. Calibrated: see README "Turbo level". */
+#define TURBO_TRIM 0.085f
+#define TURBO_ONSET 0.45f
+#define BOV_TRIM 3.0f
+/* ES_VALIDATE=1 restores Engine_Sim's own turbo (atmospheric valve, flutter, full level) for the comparison */
+static int validating(void) {
+    static int v = -1;
+    if (v < 0) v = getenv("ES_VALIDATE") != 0;
+    return v;
+}
 static void turbo_reset(Turbo *u, const Preset *p) {
     float redline = p->redline, order = 0.5f * 52;
     memset(u, 0, sizeof(*u));
@@ -862,7 +875,7 @@ static void turbo_reset(Turbo *u, const Preset *p) {
     u->inertia = 0.42f;
     u->bovLevel = 0.40f;
     u->surgeTrim = 1;
-    u->valve = 1;
+    u->valve = validating() ? 1 : 2; /* recirculating diverter valve (BMW) */
     u->flutterHz = 13;
     u->boostRpm = 3500 < 0.65f * redline ? 3500 : 0.65f * redline;
     u->whineRef = clampf(redline / 120 * order, 200, TURBO_WHINE_MAX_HZ);
@@ -874,6 +887,8 @@ static void turbo_reset(Turbo *u, const Preset *p) {
     u->wg.w = u->buzz.w = u->surgeOsc.w = &WAVE_SAW;
     sp_init(&u->out, 1);
     sp_init(&u->surgeSend, 0.55f);
+    sp_init(&u->audible, 0);
+    sp_init(&u->bovx, 1);
     sp_init(&u->whineF, 1200);
     sp_init(&u->wd1, 0);
     sp_init(&u->wd2, 0);
@@ -936,21 +951,24 @@ static void turbo_reset(Turbo *u, const Preset *p) {
 static void turbo_fire_bov(Turbo *u, double now, float strength) {
     float stored = clampf(u->boost, 0, 1), amp, dur;
     double t;
+    int recirc = u->valve == 2;
     if (u->valve == 0) return;
-    amp = clampf(u->bovLevel * 1.35f * strength * (0.15f + 0.85f * stored), 0.0005f, 2.5f);
+    amp = clampf(u->bovLevel * 1.35f * strength * (0.15f + 0.85f * stored) * (recirc ? 0.3f : 1), 0.0005f, 2.5f);
     dur = clampf(0.11f + 0.26f * stored, 0.05f, 0.5f);
     t = now + LOOKAHEAD;
     ap_cancel(&u->bovF, t);
-    ap_push(&u->bovF, EV_SET, t, hz(2600 + 1800 * stored, 2800), 0);
-    ap_push(&u->bovF, EV_EXP, t + dur * 0.8, hz(520 + 180 * stored, 620), 0);
+    ap_push(&u->bovF, EV_SET, t, hz((recirc ? 1300 : 2600) + 1800 * stored, 2800), 0);
+    ap_push(&u->bovF, EV_EXP, t + dur * 0.8, hz((recirc ? 300 : 520) + 180 * stored, 620), 0);
     ap_cancel(&u->bovQ, t);
-    ap_push(&u->bovQ, EV_SET, t, 4.5f, 0);
-    ap_push(&u->bovQ, EV_LIN, t + dur * 0.6, 11, 0);
+    ap_push(&u->bovQ, EV_SET, t, recirc ? 1.5f : 4.5f, 0);
+    ap_push(&u->bovQ, EV_LIN, t + dur * 0.6, recirc ? 3 : 11, 0);
     ap_cancel(&u->bovHiss, t);
-    ap_push(&u->bovHiss, EV_SET, t, 0.0004f, 0);
-    ap_push(&u->bovHiss, EV_LIN, t + 0.008, amp * 0.45f, 0);
-    ap_push(&u->bovHiss, EV_EXP, t + dur * 0.9, 0.0004f, 0);
-    ap_push(&u->bovHiss, EV_SET, t + dur, 0, 0);
+    if (!recirc) { /* layers.js: only an atmospheric valve vents the "pssh" */
+        ap_push(&u->bovHiss, EV_SET, t, 0.0004f, 0);
+        ap_push(&u->bovHiss, EV_LIN, t + 0.008, amp * 0.45f, 0);
+        ap_push(&u->bovHiss, EV_EXP, t + dur * 0.9, 0.0004f, 0);
+        ap_push(&u->bovHiss, EV_SET, t + dur, 0, 0);
+    }
     ap_cancel(&u->bovGain, t);
     ap_push(&u->bovGain, EV_SET, t, 0.0004f, 0);
     ap_push(&u->bovGain, EV_LIN, t + 0.012, amp, 0);
@@ -1033,6 +1051,11 @@ static void turbo_update(Turbo *u, const Params *p, float rpmNorm, float redline
     sp_set(&u->hiGain, hi, TC);
     sp_set(&u->hiGrain, hi * 0.4f, 0.05f);
     sp_set(&u->hiWander, 12 * (1 - 0.6f * u->spool), 0.08f);
+    {
+        float a = clampf((u->spool - TURBO_ONSET) / (1 - TURBO_ONSET), 0, 1);
+        sp_set(&u->audible, validating() ? 1.f : TURBO_TRIM * a * a * (3 - 2 * a) * clampf(p->xturbo, 0, 2), 0.1f);
+        sp_set(&u->bovx, (validating() ? 1.f : BOV_TRIM) * clampf(p->xbov, 0, 2), 0.05f);
+    }
     bov = clampf(p->evBov, 0, 1);
     if (bov > 0) turbo_fire_bov(u, now, bov);
     { /* _stepSurge */
@@ -1048,7 +1071,7 @@ static void turbo_update(Turbo *u, const Params *p, float rpmNorm, float redline
         shiftCut = shifting && !u->prevShifting;
         head = clampf((u->spool - 0.12f) / 0.28f, 0, 1);
         relief = u->valve == 0 ? 1 : clampf(1 - 0.9f * u->bovLevel, 0.15f, 1);
-        stall = head * relief;
+        stall = head * relief * (validating() ? 1 : 0); /* no compressor surge: the diverter valve recirculates (owner's request) */
         arm = (justClosed || dropped) ? stall : shiftCut ? stall * 1.f /* manual */ : 0;
         if (arm > 0) {
             if (u->surge < 0.1f) {
@@ -1092,7 +1115,7 @@ static float cents(float c) {
 }
 /* out: turbo bus contribution; send: surgeSend (into the exhaust inputs) */
 static void turbo_run(Turbo *u, double t, float *out, float *send) {
-    float wn[QN], grain[QN], air[QN], fr[QN], x[QN], y[QN], bus[QN], w1[QN], w2[QN], env[QN], tmp[QN], hio[QN];
+    float bv[QN], wn[QN], grain[QN], air[QN], fr[QN], x[QN], y[QN], bus[QN], w1[QN], w2[QN], env[QN], tmp[QN], hio[QN];
     int i;
     nsrc_run(&u->white, wn, QN);
     nsrc_run(&u->grainN, grain, QN);
@@ -1127,10 +1150,10 @@ static void turbo_run(Turbo *u, double t, float *out, float *send) {
     /* blow-off valve */
     bq_run_ap(&u->bovBP, BQ_BP, &u->bovF, &u->bovQ, t, wn, x, QN, &u->bovcf, &u->bovcq);
     ap_fill(&u->bovGain, t, y, QN);
-    for (i = 0; i < QN; i++) bus[i] += x[i] * y[i];
+    for (i = 0; i < QN; i++) bv[i] = x[i] * y[i];
     bqn_run(&u->bovHissHP, wn, x, QN, 0);
     ap_fill(&u->bovHiss, t, y, QN);
-    for (i = 0; i < QN; i++) bus[i] += x[i] * y[i];
+    for (i = 0; i < QN; i++) bv[i] += x[i] * y[i];
     /* wastegate stutter */
     for (i = 0; i < QN; i++) fr[i] = sp_tick(&u->wgF) + 6 * grain[i];
     osc_run(&u->wg, fr, x, QN);
@@ -1164,7 +1187,7 @@ static void turbo_run(Turbo *u, double t, float *out, float *send) {
     bqn_run(&u->surgeBody, wn, x, QN, tmp);
     for (i = 0; i < QN; i++) {
         float body = x[i] * env[i] * sp_tick(&u->surgeBodyLvl);
-        send[i] = body * sp_tick(&u->surgeSend);
+        send[i] = body * sp_tick(&u->surgeSend) * u->audible.v;
         y[i] = 0.7f * body;
     }
     bqn_run(&u->surgeEdge, wn, x, QN, 0);
@@ -1179,7 +1202,8 @@ static void turbo_run(Turbo *u, double t, float *out, float *send) {
     bqn_run(&u->fwBP, wn, w1, QN, tmp);
     for (i = 0; i < QN; i++) {
         float hs = (0.2f * x[i] + 3.2f * w1[i]) * env[i] * sp_tick(&u->hiSurgeLvl);
-        out[i] = (bus[i] + hio[i] + y[i] + hs) * sp_tick(&u->out);
+        /* the valve's whoosh bypasses the layer's air cut (it sits at 0.3-1.5 kHz where that stage is flat) */
+        out[i] = ((bus[i] + hio[i] + y[i] + hs) * sp_tick(&u->audible) + bv[i] * sp_tick(&u->bovx)) * sp_tick(&u->out);
     }
 }
 
@@ -1420,6 +1444,7 @@ void voice_init(Voice *v, const Preset *p, int turbo) {
     v->tu.on = turbo;
     sp_init(&v->turbineShelfG, 0);
     sp_init(&v->intakeTrim, 1);
+    sp_init(&v->popx, 1);
     bqn_init(&v->turbineShelf, BQ_HS, 700, 1, 0);
     v->popSend = 1.05f;
 }
@@ -1442,7 +1467,7 @@ void voice_update(Voice *v, const Params *pin, int immediate) {
     p.rpmNorm = voice_rpmnorm(pr, p.rpm);
     f0 = clampf(p.f0, 0.02f, 4000);
     if (p.dt > 0) {
-        float rise = (p.load - v->prevLoad) / p.dt, b = v->bark * expf(-p.dt / 0.16f), r = clampf(rise / 10, 0, 1);
+        float rise = (p.load - v->prevLoad) / p.dt, b = v->bark * expf(-p.dt / 0.16f), r = p.noBark ? 0.f : clampf(rise / 10, 0, 1);
         v->bark = b > r ? b : r;
     }
     v->prevLoad = p.load;
@@ -1457,6 +1482,8 @@ void voice_update(Voice *v, const Params *pin, int immediate) {
     turb = (v->tu.on && !v->tu.releasing) ? 0.55f + 0.45f * clampf(v->tu.spool, 0, 1) : 0;
     sp_set(&v->turbineShelf.g, -7 * turb, 0.12f);
     sp_set(&v->intakeTrim, 1 - 0.4f * turb, 0.12f);
+    /* X pops: level of the combustion reports (0 = none; how often they come is set in the control model) */
+    sp_set(&v->popx, clampf(p.xpops, 0, 2), 0.05f);
     exhaust_update(&v->ex, &p, p.rpmNorm);
     intake_update(&v->in, &p, p.rpmNorm);
     trans_update(&v->tr, &p);
@@ -1473,6 +1500,7 @@ void voice_render(Voice *v, double t, Busses *o) {
     char_run(&v->ch, trem);
     exn_run(&v->exn, en);
     tb_run(&v->tb, t, mech, tcomb);
+    for (i = 0; i < QN; i++) tcomb[i] *= sp_tick(&v->popx);
     if (turbo) {
         turbo_run(&v->tu, t, tout, send);
         if (v->tu.releasing && t >= v->tu.releaseAt) v->tu.on = v->tu.releasing = 0;

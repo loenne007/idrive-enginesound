@@ -60,6 +60,7 @@ void fx_init(Fx *f) {
     int c, i;
     memset(f, 0, sizeof(*f));
     curves();
+    bqn_init(&f->bass, BQ_LS, 150, 1, 0); /* X bass: +-9 dB below ~150 Hz */
     bqn_init(&f->infra[0], BQ_HP, 36, BW, 0);
     bqn_init(&f->infra[1], BQ_HP, 36, BW, 0);
     bqn_init(&f->blp1, BQ_LP, 140, BW, 0);
@@ -109,7 +110,8 @@ void fx_init(Fx *f) {
 void fx_run(Fx *f, const float *mix, float *l, float *r) {
     float a[QN], b[QN], w[QN], m[QN], s[QN], bl[3][QN], br[3][QN], t[QN];
     int i, k;
-    bqn_run(&f->infra[0], mix, a, QN, 0);
+    bqn_run(&f->bass, mix, a, QN, 0);
+    bqn_run(&f->infra[0], a, a, QN, 0);
     bqn_run(&f->infra[1], a, a, QN, 0);
     /* BassEnhancer: LR4 140 -> drive 2.2 -> span 1/4 -> shaper 2x -> HP 90 -> LP 420 -> 0.15 */
     bqn_run(&f->blp1, a, b, QN, 0);

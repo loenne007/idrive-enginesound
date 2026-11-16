@@ -6,7 +6,8 @@
 #define SR 48000
 #define BLOCK 256
 #define NP 4
-#define FRAME_Q 6 /* params are rebuilt every 6 render quanta = 768 frames = 16 ms (~ an animation frame) */
+#define FRAME_Q 3 /* params are rebuilt every 3 render quanta = 384 frames = 8 ms (sharper than a 60 Hz frame) */
+enum { X_OFFGAS, X_TURBO, X_BOV, X_POPS, X_BASS, X_N };
 int preset_find(const char *s);
 
 /* control-input model: turns P/S lines into Engine_Sim's per-frame params object */
@@ -14,9 +15,9 @@ typedef struct {
     float rpm, prevRpm, dRpm, load, overrun, egt, dfcoEdge, popCharge, thrPeak, cutRpmN, popRefractory,
         limiterBark, boost, boostDump, overrunHeld, prevOverride;
     int dfco, prevDfco, bovArm, prevLimiter, started;
-    /* shift (shift.js 'manual', sports car 95 ms) */
-    int sphase, sdown;
-    float st, sslip, sratio;
+    /* automatic-gearbox shift envelope (ZF 8HP style: no cut, no clutch, no transients) */
+    int sactive, sdown;
+    float st, quiet, rpmSlew, loadHeld, heldBeforeLift;
     float evCut, evLash, evEngage, evBov, evShiftDone, evPop;
     uint32_t rnd;
 } Drive;
@@ -29,7 +30,8 @@ typedef struct {
     float rpm, load, throttle, speed, volume;
     double time, last_p, audio_t; /* time: watchdog clock (main.c may set it to the wall clock) */
     uint64_t quanta;
-    SP vol, mutegain, stale, quitg;
+    SP vol, mutegain, stale, quitg, offgas;
+    float x[X_N]; /* X sound settings, 0..2 */
     float ol[QN], or_[QN];
     int opos;
     FILE *dump;

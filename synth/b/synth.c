@@ -6,14 +6,22 @@
 
 #define FRAME_DT ((float)(FRAME_Q * QN) / SR_F)
 #define POP_MIN_RPM 2000
-/* shift.js GEARBOX_TYPES.manual with the 'sports' vehicle's shiftTimeMs = 95 */
-#define T_CUT 0.030f
-#define T_OPEN 0.035f
-#define T_SYNC 0.018f
-#define T_ENGAGE 0.050f
-#define T_LASH 0.030f
-#define T_SHUFFLE 0.360f
-
+/* The car is a ZF 8HP automatic: a shift is a short torque-management dip under a locked converter, not
+ * Engine_Sim's manual sequence (ignition cut, clutch open, re-engage, clunk). Even shift.js's 'auto' type cuts
+ * 55 % of the torque, which in this synth reads as the engine stopping; so: */
+#define UP_DIP 0.15f     /* upshift: combustion load -15 % at most ... */
+#define UP_PEAK 0.070f   /* ... reached smoothly 70 ms after the S line ... */
+#define UP_END 0.180f    /* ... and fully recovered by 180 ms */
+#define DN_BLIP 0.12f    /* downshift: a tiny blip, +0.12 load, 30 ms rise, 120 ms decay */
+#define DN_RISE 0.030f
+#define DN_TAU 0.120f
+#define DN_END 0.600f
+#define QUIET_AFTER 0.45f /* no bark from the recovery for this long after the envelope ends */
+/* off-gas level correction, dB, per preset (i6 v8 v10 v12) for idle, light load and coasting: Engine_Sim's own
+ * balance puts the overrun 12-17 dB under full load on the V engines; the owner wants every off-throttle state
+ * about 8 dB under full load. Measured on fixed test points (see README). X offgas multiplies the result. */
+static const float OFFGAS_DB[4][3] = {{0, -1, -3}, {-8.5f, -2, 5}, {2, -1, 7}, {0, 0, 8}};
+static const char *X_NAMES[X_N] = {"offgas", "turbo", "bov", "pops", "bass"};
 static void enable_ftz(void) {
 #if defined(__aarch64__)
     uint64_t fpcr;
@@ -67,6 +75,8 @@ void synth_init(Synth *s, int preset, float volume) {
     s->rpm = presets[preset].idle;
     s->dr.rpm = s->dr.prevRpm = s->rpm;
     s->dr.rnd = 0x1234567u;
+    for (k = 0; k < X_N; k++) s->x[k] = 1;
+    sp_init(&s->offgas, 1);
     for (k = 0; k < NP; k++) { /* warm every preset's combustion calibration so E never stalls the audio */
         voice_init(&s->voice[k], &presets[k], 0);
         s->voice[k].active = 0;
@@ -123,6 +133,14 @@ int synth_control(Synth *s, const char *line) {
         }
         return 1;
     }
+    if (sscanf(line, "X %31s %f %c", name, &v, &extra) == 2 && isfinite(v)) {
+        for (k = 0; k < X_N; k++)
+            if (!strcmp(name, X_NAMES[k])) {
+                s->x[k] = clampf(v, 0, 2);
+                return 1;
+            }
+        return 0;
+    }
     if (line[0] == 'Q' && sscanf(line + 1, " %c", &extra) != 1) {
         s->quit = 1;
         return 1;
@@ -130,83 +148,32 @@ int synth_control(Synth *s, const char *line) {
     return 0;
 }
 
-/* ---- shift.js: cut -> open -> sync -> engage -> lash -> shuffle, with its events ---- */
-static void shift_start(Synth *s, Drive *d, int a, int b) {
-    const Preset *pr = &presets[s->selected];
-    float heat = clampf((d->egt - 0.45f) / 0.35f, 0, 1), mag = 0.85f * (0.25f + 0.75f * s->throttle) * heat;
-    float pFire = clampf((0.12f + 0.55f * heat) * 0.85f, 0, 0.9f);
-    float ra = pr->ratios[(a > pr->gears ? pr->gears : a) - 1], rb = pr->ratios[(b > pr->gears ? pr->gears : b) - 1];
-    d->sphase = PH_CUT;
+/* ---- automatic shift: a smooth torque envelope, nothing else ---- */
+static void shift_start(Drive *d, int a, int b) {
+    d->sactive = 1;
     d->st = 0;
     d->sdown = b < a;
-    d->sratio = rb / ra;
-    if (mag > 0.04f && drand(d) < pFire) fire(&d->evCut, mag, d->rpm, 0);
 }
-/* returns fuel cut (1 = injectors off), sets *override (rev-match blip, < 0 = none), *neutral, *clutch */
-static float shift_step(Synth *s, Drive *d, float h, float *override, int *neutral, float *clutch, float *slip) {
-    float cut = 0;
-    *override = -1;
-    *neutral = 0;
-    *clutch = 1;
-    *slip = 0;
-    if (d->sphase == PH_NONE) return 0;
+static float smooth01(float x) {
+    x = clampf(x, 0, 1);
+    return x * x * (3 - 2 * x);
+}
+/* *mul scales the combustion load, *add is the rev-match blip */
+static void shift_step(Drive *d, float h, float *mul, float *add) {
+    *mul = 1;
+    *add = 0;
+    if (d->quiet > 0) d->quiet -= h;
+    if (!d->sactive) return;
     d->st += h;
-    for (;;) {
-        if (d->sphase == PH_CUT && d->st >= T_CUT) {
-            d->st -= T_CUT;
-            d->sphase = PH_OPEN;
-        } else if (d->sphase == PH_OPEN && d->st >= (d->sdown ? 2 * T_OPEN : T_OPEN)) {
-            d->st -= d->sdown ? 2 * T_OPEN : T_OPEN;
-            d->sphase = PH_SYNC;
-        } else if (d->sphase == PH_SYNC && d->st >= T_SYNC) {
-            d->st -= T_SYNC;
-            d->sphase = PH_ENGAGE;
-            /* clutch bite: slip left between the engine and the new gear's input shaft */
-            d->sslip = d->sdown ? 120 : 0.5f * fabsf(d->rpm * (1 - d->sratio));
-            fire(&d->evEngage, clampf(0.15f + d->sslip / 1800, 0, 1), d->rpm, 0);
-        } else if (d->sphase == PH_ENGAGE && d->st >= T_ENGAGE) {
-            d->st -= T_ENGAGE;
-            d->sphase = PH_LASH;
-            fire(&d->evShiftDone, 1, d->rpm, 0);
-            /* the driveline takes up its backlash as torque comes back */
-            fire(&d->evLash, clampf(0.12f + 0.45f * s->throttle, 0.05f, 1), d->rpm, 0);
-        } else if (d->sphase == PH_LASH && d->st >= T_LASH) {
-            d->st -= T_LASH;
-            d->sphase = PH_SHUFFLE;
-        } else if (d->sphase == PH_SHUFFLE && d->st >= T_SHUFFLE) {
-            d->sphase = PH_NONE;
-            d->st = 0;
-            return 0;
-        } else
-            break;
+    if (!d->sdown) {
+        float env = d->st < UP_PEAK ? smooth01(d->st / UP_PEAK) : 1 - smooth01((d->st - UP_PEAK) / (UP_END - UP_PEAK));
+        *mul = 1 - UP_DIP * env;
+        if (d->st >= UP_END) d->sactive = 0;
+    } else {
+        *add = DN_BLIP * (d->st < DN_RISE ? smooth01(d->st / DN_RISE) : expf(-(d->st - DN_RISE) / DN_TAU));
+        if (d->st >= DN_END) d->sactive = 0;
     }
-    switch (d->sphase) {
-    case PH_CUT:
-        cut = 1;
-        break;
-    case PH_OPEN:
-        *neutral = 1;
-        *clutch = 0;
-        if (d->sdown)
-            *override = 0.85f; /* blip */
-        else
-            cut = 1;
-        break;
-    case PH_SYNC:
-        *neutral = 1;
-        *clutch = 0;
-        cut = 1;
-        break;
-    case PH_ENGAGE: {
-        float u = clampf(d->st / T_ENGAGE, 0, 1), sm = u * u * (3 - 2 * u);
-        *clutch = sm;
-        *slip = d->sslip * (1 - sm);
-        break;
-    }
-    default:
-        break;
-    }
-    return cut;
+    d->quiet = QUIET_AFTER;
 }
 
 /* physics.js _stepTurbo (boost pressure + the blow-off event) */
@@ -219,7 +186,7 @@ static void turbo_step(Drive *d, const Preset *pr, float h, float thr, int limit
     d->boost += (target - d->boost) * (h / tau < 1 ? h / tau : 1);
     d->boost = clampf(d->boost, 0, 1);
     if (d->boostDump > 0) d->boostDump -= h;
-    if (thr > 0.45f)
+    if (thr > 0.45f && d->loadHeld >= 0.5f) /* only a sustained boost load, then a real lift, dumps the valve */
         d->bovArm = 1;
     else if (d->bovArm && thr < 0.12f && d->boost > 0.18f && !limiterActive) {
         d->bovArm = 0;
@@ -229,8 +196,7 @@ static void turbo_step(Drive *d, const Preset *pr, float h, float thr, int limit
 }
 
 /* physics.js _stepExhaustThermal: exhaust heat, fuel cut and the pops */
-static void thermal_step(Synth *s, Drive *d, const Preset *pr, float h, float thr, int neutral, float override,
-                         int limiterActive) {
+static void thermal_step(Synth *s, Drive *d, const Preset *pr, float h, float thr, int limiterActive) {
     float rpm = d->rpm, rpmN = clampf((rpm - pr->idle) / (pr->redline - pr->idle > 1 ? pr->redline - pr->idle : 1), 0, 1);
     float target = clampf(0.12f + 0.88f * powf(thr, 0.6f) * (0.35f + 0.65f * rpmN), 0, 1);
     float tau = target > d->egt ? 5.0f : 26.0f, pedal = s->throttle;
@@ -238,43 +204,43 @@ static void thermal_step(Synth *s, Drive *d, const Preset *pr, float h, float th
     d->egt += (target - d->egt) * (h / tau < 1 ? h / tau : 1);
     /* DFCO: closed pedal, revs up, and the overrun has lasted a moment (engine braking reported by load < 0) */
     d->overrunHeld = s->load <= 0 ? d->overrunHeld + h : 0;
-    cutting = pedal < 0.06f && rpm > pr->idle * 1.5f && !neutral && d->overrunHeld >= 0.1f;
+    cutting = pedal < 0.06f && rpm > pr->idle * 1.5f && d->overrunHeld >= 0.1f;
+    /* pops need a genuine lift: the pedal held (> 0.3) for at least 0.5 s, then released */
+    if (pedal > 0.3f)
+        d->loadHeld += h;
+    else if (d->loadHeld > 0) {
+        d->heldBeforeLift = d->loadHeld;
+        d->loadHeld = 0;
+    }
     d->dfco = cutting;
     d->thrPeak = pedal > d->thrPeak - h / 0.7f ? pedal : d->thrPeak - h / 0.7f;
     d->popRefractory = d->popRefractory - h > 0 ? d->popRefractory - h : 0;
     d->limiterBark = d->limiterBark - h > 0 ? d->limiterBark - h : 0;
-    if (limiterActive && !d->prevLimiter && d->egt > 0.5f && d->limiterBark <= 0) {
+    if (limiterActive && !d->prevLimiter && d->egt > 0.5f && d->limiterBark <= 0 && s->x[X_POPS] > 0) {
         d->limiterBark = 0.34f;
         fire(&d->evPop, clampf(0.16f + 0.14f * drand(d), 0, 1), rpm, 1);
     }
     d->prevLimiter = limiterActive;
     if (d->dfco != d->prevDfco) {
         d->dfcoEdge = 1;
-        if (d->dfco) {
+        if (d->dfco && d->heldBeforeLift >= 0.5f) {
             float snap = clampf(d->thrPeak, 0, 1), rev = powf(rpmN, 1.7f), luck = 0.55f + drand(d) * 0.95f, pFire;
             d->cutRpmN = rpmN;
             d->popCharge = clampf(d->popCharge + (0.5f + 2.1f * rev) * (0.4f + 0.6f * snap) * luck, 0, 3.4f);
             pFire = clampf((d->egt - 0.42f) / 0.34f, 0, 1) * (0.18f + 0.82f * rev) * (0.45f + 0.55f * snap);
+            pFire = clampf(pFire * s->x[X_POPS], 0, 1); /* X pops: 0 never, 2 twice as often */
             if (d->egt > 0.42f && d->popRefractory <= 0 && drand(d) < pFire) {
                 d->popRefractory = 0.45f;
                 fire(&d->evPop,
                      clampf((d->egt - 0.35f) * 1.25f * (0.10f + 1.30f * rev) * (0.35f + 0.65f * snap) * luck, 0, 1), rpm,
                      1);
             }
-        } else
+            d->heldBeforeLift = 0;
+        } else if (!d->dfco && d->popCharge > 0)
             d->popCharge = clampf(d->popCharge + 0.35f, 0, 3.4f);
     }
     d->prevDfco = d->dfco;
     d->dfcoEdge = d->dfcoEdge - h / 0.85f > 0 ? d->dfcoEdge - h / 0.85f : 0;
-    if (d->prevOverride > 0.3f && !(override > 0.3f)) {
-        float pFire = clampf((d->egt - 0.32f) / 0.30f, 0, 1) * (0.35f + 0.65f * rpmN);
-        d->popCharge = clampf(d->popCharge + 1.1f + 0.5f * rpmN, 0, 2.6f);
-        if (d->egt > 0.32f && d->popRefractory <= 0 && drand(d) < pFire) {
-            d->popRefractory = 0.45f;
-            fire(&d->evPop, clampf((d->egt - 0.25f) * 1.45f * (0.5f + 0.5f * rpmN), 0, 1), rpm, 1);
-        }
-    }
-    d->prevOverride = override < 0 ? 0 : override;
     d->popCharge = d->popCharge - h * (0.22f + 0.55f * (1 - d->dfco));
     if (d->popCharge < 0) d->popCharge = 0;
 }
@@ -284,28 +250,31 @@ static void frame(Synth *s, int immediate) {
     Drive *d = &s->dr;
     const Preset *pr = &presets[s->selected];
     Params p;
-    float h = immediate ? 0 : FRAME_DT, override, clutch, slip, cut, thr, rpmN;
-    int neutral, limiterActive, k, gear = s->gear;
+    float h = immediate ? 0 : FRAME_DT, mul, add, base, thr, rpmN;
+    int limiterActive, k, gear = s->gear;
     memset(&p, 0, sizeof(p));
     d->evCut = d->evLash = d->evEngage = d->evBov = d->evShiftDone = d->evPop = 0;
-    /* rpm: the controller sends ~50 Hz steps; smooth them like a crank would (30 ms) */
+    /* rpm follows P directly; the voices' own 20 ms setTargetAtTime (Engine_Sim) rounds the steps */
     if (!d->started || immediate) {
         d->rpm = d->prevRpm = s->rpm;
         d->started = 1;
     } else
-        d->rpm += (s->rpm - d->rpm) * (1 - expf(-h / 0.03f));
+        d->rpm = s->rpm;
     if (s->pending_shift_a) {
-        shift_start(s, d, s->pending_shift_a, s->pending_shift_b);
+        shift_start(d, s->pending_shift_a, s->pending_shift_b);
         s->pending_shift_a = s->pending_shift_b = 0;
     }
-    cut = shift_step(s, d, h, &override, &neutral, &clutch, &slip);
-    thr = (override >= 0 ? override : clampf(s->load, 0, 1)) * (1 - cut);
+    shift_step(d, h, &mul, &add);
+    base = clampf(s->load, 0, 1);
+    thr = clampf(base * mul + add, 0, 1);
     limiterActive = d->rpm >= pr->redline && s->throttle > 0.5f;
     if (limiterActive) thr = 0;
-    if (s->turbo) turbo_step(d, pr, h, thr, limiterActive);
+    if (limiterActive) base = 0;
+    /* boost / blow-off and exhaust heat follow the driver's load, not the shift envelope */
+    if (s->turbo) turbo_step(d, pr, h, base, limiterActive);
     else
         d->boost = 0;
-    thermal_step(s, d, pr, h, thr, neutral, override, limiterActive);
+    thermal_step(s, d, pr, h, base, limiterActive);
     rpmN = clampf((d->rpm - pr->idle) / (pr->redline - pr->idle), 0, 1);
     p.now = s->audio_t;
     p.dt = h;
@@ -323,7 +292,7 @@ static void frame(Synth *s, int immediate) {
     d->load += (thr - d->load) * (h > 0 ? clampf(h * 12, 0, 1) : 1);
     p.load = clampf(d->load, 0, 1);
     {
-        float tgt = (thr < 0.05f && d->rpm > pr->idle * 1.7f && s->load < -0.02f) ? 1.f : 0.f;
+        float tgt = (base < 0.05f && d->rpm > pr->idle * 1.7f && s->load < -0.02f) ? 1.f : 0.f;
         d->overrun += (tgt - d->overrun) * (h > 0 ? clampf(h * 8, 0, 1) : 1);
     }
     p.overrun = clampf(d->overrun, 0, 1);
@@ -333,11 +302,12 @@ static void frame(Synth *s, int immediate) {
     p.gearRatio = gear > 0 ? pr->ratios[k - 1] * 3.73f : 0;
     p.speed = s->speed / 3.6f;
     p.wheelRpm = p.speed / (2 * 3.14159265f * 0.33f) * 60 * 3.73f; /* propshaft rpm */
-    p.clutchSlip = slip;
-    p.clutchEngaged = clutch;
+    p.clutchSlip = 0;
+    p.clutchEngaged = 1; /* converter locked through the shift */
     p.boost = d->boost;
-    p.shifting = d->sphase != PH_NONE;
-    p.phase = d->sphase;
+    p.shifting = 0; /* no shift phase: nothing in the voices (surge, crackle gate, whine mute) reacts to it */
+    p.phase = PH_NONE;
+    p.noBark = d->quiet > 0;
     p.evCut = d->evCut;
     p.evLash = d->evLash;
     p.evEngage = d->evEngage;
@@ -347,7 +317,24 @@ static void frame(Synth *s, int immediate) {
     p.popIntensity = clampf(((d->egt - 0.45f) > 0 ? d->egt - 0.45f : 0) / 0.55f * clampf(d->popCharge, 0, 1) *
                                 (0.12f + 0.88f * d->dfcoEdge) * (0.45f + 0.55f * d->cutRpmN),
                             0, 1) *
-                     (d->rpm >= POP_MIN_RPM ? 1.f : 0.f);
+                     (d->rpm >= POP_MIN_RPM ? 1.f : 0.f) * s->x[X_POPS]; /* crackle stream: denser with X pops 2 */
+    p.xturbo = s->x[X_TURBO];
+    p.xbov = s->x[X_BOV];
+    p.xpops = s->x[X_POPS];
+    if (getenv("ES_VALIDATE")) p.xpops = p.xturbo = p.xbov = 1;
+    { /* off-gas balance: blend of idle / light-load / coast corrections by the current state */
+        int pi = (int)(pr - presets);
+        float wf = clampf(p.load / 0.7f, 0, 1), wc, wi, db, gl;
+        wf = wf * wf * (3 - 2 * wf);
+        wc = p.overrun * (1 - wf);
+        wi = (1 - wf - wc) * (1 - clampf(rpmN / 0.15f, 0, 1));
+        db = OFFGAS_DB[pi][0] * wi + OFFGAS_DB[pi][1] * (1 - wf - wc - wi) + OFFGAS_DB[pi][2] * wc;
+        gl = powf(10, db / 20) * (1 - wf) + wf;
+        /* X offgas multiplies the off-throttle level (floored at -18 dB so the engine never vanishes) */
+        gl *= 1 + (1 - wf) * ((s->x[X_OFFGAS] > 0.125f ? s->x[X_OFFGAS] : 0.125f) - 1);
+        if (getenv("ES_VALIDATE")) gl = 1;
+        sp_set(&s->offgas, gl, 0.08f);
+    }
     for (k = 0; k < NP; k++)
         if (s->voice[k].active) voice_update(&s->voice[k], &p, immediate);
     if (s->dump)
@@ -372,6 +359,7 @@ static void quantum(Synth *s) {
     sp_set(&s->quitg, s->quit ? 0.f : 1.f, 0.1f);
     for (i = 0; i < QN; i++) g[i] = sp_tick(&s->mutegain) * sp_tick(&s->stale) * sp_tick(&s->quitg);
     sp_set(&s->fx.master, s->volume, 0.05f);
+    sp_set(&s->fx.bass.g, 9 * (s->x[X_BASS] - 1), 0.05f);
     /* fully faded (muted / no data / quitting): skip the DSP entirely */
     if (g[QN - 1] < 1e-6f && g[0] < 1e-6f && (s->mute || !stale_t || s->quit)) {
         for (i = 0; i < QN; i++) s->ol[i] = s->or_[i] = 0;
@@ -391,8 +379,22 @@ static void quantum(Synth *s) {
         any = 1;
     }
     (void)any;
+    { /* ES_BUS=turbo|engine: calibration renders of the turbo layer alone / everything else */
+        static int solo = -1;
+        if (solo < 0) {
+            const char *e = getenv("ES_BUS");
+            solo = !e ? 0 : !strcmp(e, "turbo") ? 1 : 2;
+        }
+        if (solo)
+            for (i = 0; i < QN; i++) {
+                if (solo == 1)
+                    b.exhaust[i] = b.intake[i] = b.transmission[i] = b.transients[i] = b.sub[i] = 0;
+                else
+                    b.turbo[i] = 0;
+            }
+    }
     for (i = 0; i < QN; i++)
-        mix[i] = 0.95f * (1.0f * b.exhaust[i] + 0.75f * b.intake[i] + 0.45f * b.transmission[i] + 0.40f * b.turbo[i] +
+        mix[i] = sp_tick(&s->offgas) * 0.95f * (1.0f * b.exhaust[i] + 0.75f * b.intake[i] + 0.45f * b.transmission[i] + 0.40f * b.turbo[i] +
                           0.42f * b.transients[i] + 0.25f * b.sub[i]);
     fx_run(&s->fx, mix, s->ol, s->or_);
     for (i = 0; i < QN; i++) {
@@ -446,14 +448,26 @@ void demo_control(Synth *s, double t, double duration) {
         th = z < .45 ? .7f : .03f;
         l = z < .45 ? .6f : -.5f;
     } else if (u >= 9 && u < 25) {
-        double z = (u - 9) / 3.2;
+        double z = (u - 9) / 3.2, ds = (z - floor(z)) * 3.2 * duration / 40; /* seconds into this gear */
         g = 1 + (int)z;
-        r = p->redline * (.38f + .47f * (float)(z - floor(z)));
+        /* gear 1 pulls from 38 %, later gears from 60 % of redline: an 8HP ratio step drops the revs ~30 % */
+        r = p->redline * (g == 1 ? .38f + .47f * (float)(z - floor(z)) : .60f + .25f * (float)(z - floor(z)));
+        /* like the car's telemetry, rpm ramps through the upshift in ~350 ms instead of stepping */
+        if (g > 1 && ds < .35) {
+            float w = (float)(ds / .35);
+            w = w * w * (3 - 2 * w);
+            r = p->redline * .85f + (r - p->redline * .85f) * w;
+        }
         l = .9f;
         th = .94f;
     } else if (u >= 25 && u < 31) {
-        g = 5 - (int)((u - 25) / 1.5);
-        r = p->redline * (.75f - .07f * (float)(u - 25));
+        double k = (u - 25) / 1.5, ds = (k - floor(k)) * 1.5 * duration / 40;
+        float w = (float)(ds / .3), f;
+        g = 5 - (int)k;
+        w = w > 1 ? 1 : w * w * (3 - 2 * w);
+        /* coasting: the revs sag in each gear and rise smoothly (~300 ms) on every downshift */
+        f = k >= 1 ? 1 + .15f * w - .15f * (float)(k - floor(k)) : 1 - .15f * (float)(k - floor(k));
+        r = p->redline * (.75f - .07f * (float)(u - 25)) * f;
         l = -.8f;
         th = 0;
     } else if (u >= 31 && u < 36) {

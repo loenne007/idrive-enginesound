@@ -7,7 +7,7 @@ def read(path):
  with wave.open(str(path),'rb') as w:
   n=w.getnchannels();a=array.array('h',w.readframes(w.getnframes()))
   if sys.byteorder!='little':a.byteswap()
-  return [v/32768 for v in a[::n]]
+  return [sum(a[i:i+n])/(32768*n) for i in range(0,len(a),n)] if n>1 else [v/32768 for v in a]  # mono = (L+R)/2
 def fft(x):
  n=len(x);a=[complex(v) for v in x];j=0
  for i in range(1,n):
@@ -91,13 +91,111 @@ assert level(a[int(10.5*48000):int(11.5*48000)])<.0001,'watchdog failed'
 assert level(a[int(5.1*48000):int(5.4*48000)])<.003,'mute failed'
 assert level(a[-4800:])<.0001,'quit fade failed'
 # Compare negative-load impulsiveness with positive cruise at equal rpm.
-for p in ('v8','v10'):
+for p,hi in (('v8',5800),('v10',6600)):
  vals=[]
- for load in (.05,-.8):
-  # a hard run first: pops need a hot pipe (Engine_Sim's exhaust-gas temperature model), then a long lift/cruise
-  pre=[f'{t/20} P 4500 1 1 3 70' for t in range(240)]
-  a=render(p,f'overrun{load}',pre+[f'{12+t/20} P 4000 {load} {0 if load<0 else .1} 3 70' for t in range(161)])
-  a=a[12*48000:14*48000];r=level(a);vals.append(max(map(abs,a))/r)  # the 2 s after the lift: bang + crackle
- assert vals[1]>vals[0]*1.1,(p,'overrun transients missing',vals)
- print(f'{p}: overrun crest factor {vals[0]:.2f}->{vals[1]:.2f}')
-print('PASS: levels, pitch, brightness, transients, transitions, mute, stale input and quit')
+ for pops in (0,1):
+  # a hard run first (pops need a hot pipe: Engine_Sim's exhaust-gas temperature), then three real lifts with
+  # full-load runs between; the same drive with X pops 0 is the reference (pops are stochastic in Engine_Sim)
+  lines=[f'0 X pops {pops}']+[f'{t/20} P {hi} 1 1 3 70' for t in range(240)];crest=[]
+  for k in range(3):
+   t0=12+k*4
+   lines+=[f'{t0+t/20} P {hi-t*12} -.8 0 3 70' for t in range(50)]
+   lines+=[f'{t0+2.5+t/20} P {hi} 1 1 3 70' for t in range(30)]
+  a=render(p,f'overrun-pops{pops}',lines)
+  for k in range(3):
+   w=a[int((12+k*4)*48000):int((14+k*4)*48000)];crest.append(max(map(abs,w))/level(w))
+  vals.append(max(crest))
+ assert vals[1]>vals[0]*1.1,(p,'overrun pops missing',vals)
+ print(f'{p}: overrun crest factor without/with pops {vals[0]:.2f}->{vals[1]:.2f}')
+# Automatic-gearbox shifts: an S event must not change the level (85 ms RMS envelope) by more than 3 dB around
+# the shift, compared with the same drive without it.
+def env85(a):
+ n=4080;return [10*math.log10(sum(x*x for x in a[i:i+n])/n+1e-20) for i in range(0,len(a)-n+1,n)]
+def smooth(x):x=min(1,max(0,x));return x*x*(3-2*x)
+for p in info['presets']:
+ name,red=p['id'],p['redline'];worst=[]
+ cases={
+  'ramp-up':(2,3,lambda t:red*(.70+.02*t) if t<4 else red*(.78-.20*smooth((t-4)/.3)+.02*(t-4)),.9,.94),
+  'step-up':(2,3,lambda t:red*(.70+.02*t) if t<4 else red*(.58+.02*(t-4)),.9,.94),
+  'overrun-down':(4,3,lambda t:red*(.45-.01*t) if t<4 else red*(.41+.07*smooth((t-4)/.3)-.01*(t-4)),-.5,0),
+ }
+ for case,(ga,gb,rpm,load,thr) in cases.items():
+  envs=[]
+  for with_s in (1,0):
+   lines=[]
+   for i in range(401):
+    t=i/50;g=ga if t<4 else gb
+    if with_s and i==200:lines.append(f'{t} S {ga} {gb}')
+    lines.append(f'{t} P {rpm(t):.1f} {load} {thr} {g} {rpm(t)*.012*g:.1f}')
+   envs.append(env85(render(name,f'shift-{case}-{with_s}',lines)))
+  k0,k1=int(3.5*48000/4080),int(5.0*48000/4080)
+  d=max(abs(a-b) for a,b in zip(envs[0][k0:k1],envs[1][k0:k1]))
+  worst.append(f'{case} {d:.1f} dB')
+  assert d<=3,(name,case,'shift changes the level',d)
+ # every demo upshift (at 12.2, 15.4, 18.6, 21.8 s of the 40 s demo) stays within 3.5 dB of the level around it
+ e=env85(read(ROOT/'samples'/f'{name}.wav'));fr=48000/4080;dips=[]
+ for ts in (12.2,15.4,18.6,21.8):
+  seg=lambda a,b:e[int(a*fr):int(b*fr)]
+  before=sum(seg(ts-.6,ts-.1))/len(seg(ts-.6,ts-.1));after=sum(seg(ts+.5,ts+1))/len(seg(ts+.5,ts+1))
+  mid=seg(ts-.1,ts+.5);dip=min(before,after)-min(mid);bump=max(mid)-max(before,after)
+  dips.append(round(max(dip,bump),1))
+  assert dip<=3.5 and bump<=3.5,(name,ts,'demo upshift level jump',before,after,min(mid),max(mid))
+ print(f'{name}: shift level change vs no shift: {", ".join(worst)}; demo upshift deviation {dips} dB')
+# Response: the sound follows a P rpm step within ~30 ms (firing frequency of the output)
+def peak_hz(a,lo,hi):
+ n=len(a);s=fft([v*(.5-.5*math.cos(2*math.pi*i/(n-1))) for i,v in enumerate(a)])
+ k0,k1=int(lo*n/48000),int(hi*n/48000);k=max(range(k0,k1),key=s.__getitem__);return k*48000/n
+a=render('v10','response',[f'{t/50} P {2400 if t<100 else 4800} .5 .55 3 50' for t in range(151)])
+got=peak_hz(a[int(2.035*48000):int(2.035*48000)+4096],250,500)
+assert abs(got/400-1)<.06,('rpm response too slow: 35 ms after the step the firing is at',got,'not 400 Hz')
+print(f'response: 35 ms after a 2400->4800 rpm step the V10 fires at {got:.0f} Hz (target 400)')
+# Off-gas balance: idle, light load and coasting about 7-9 dB under full load
+def og(p,x=None):
+ lines=([f'0 X offgas {x}'] if x is not None else [])
+ for i in range(801):
+  t=i/50
+  st=(p['idle'],.05,.03,0) if t<4 else (2500,.15,.17,3) if t<8 else (3000,-.4,0,3) if t<12 else (.8*p['redline'],1,1,3)
+  lines.append(f'{t} P {st[0]:.1f} {st[1]} {st[2]} {st[3]} 50')
+ a=render(p['id'],f'offgas{x}',lines);L=lambda s,e:20*math.log10(level(a[int(s*48000):int(e*48000)]))
+ return L(14,16),L(2,4),L(6,8),L(10,12)
+for p in info['presets']:
+ full,idle,light,coast=og(p)
+ for name,v in (('idle',idle),('light',light),('coast',coast)):
+  assert 5.5<=full-v<=10.5,(p['id'],name,'off-gas level',full-v)
+ q=og(p,0.5)
+ assert q[1]<idle-4 and q[3]<coast-4 and abs(q[0]-full)<1.5,(p['id'],'X offgas 0.5',q,(full,idle,coast))
+ print(f"{p['id']}: off-gas vs full load: idle {idle-full:+.1f}, light {light-full:+.1f}, coast {coast-full:+.1f} dB; X offgas 0.5 -> idle {q[1]-full:+.1f} dB")
+# X settings: turbo / bov / pops 0 remove them, bass moves the low end, changes are click-free
+def turbo_only(name,lines):
+ script=ROOT/'build'/f'{name}.txt';script.write_text('\n'.join(lines)+'\n');path=ROOT/'build'/f'{name}.wav'
+ subprocess.run([str(BIN),'--out','wav:'+str(path),'--preset','v8','--script',str(script)],check=True,env={**__import__('os').environ,'ES_BUS':'turbo'})
+ return read(path)
+pull=[f'{t/50} P {3000+t*8 if t<300 else 2500} {.95 if t<300 else -.5} {1 if t<300 else 0} 3 80' for t in range(401)]
+lv={}
+for xs in ('','X turbo 0','X bov 0','X turbo 0;X bov 0'):
+ pre=[f'0 {c}' for c in xs.split(';') if c]
+ a=turbo_only('xturbo'+xs.replace(' ','').replace(';',''),['0 T 1']+pre+pull)
+ lv[xs]=(level(a[int(4*48000):int(6*48000)]),max(map(abs,a[int(6*48000):int(6.6*48000)])))
+assert lv[''][0]>1e-4 and lv['X turbo 0'][0]<lv[''][0]*0.02,('X turbo 0 must silence the turbo',lv)
+assert lv['X turbo 0'][1]>1e-3 and lv['X turbo 0;X bov 0'][1]<lv['X turbo 0'][1]*0.05,('X bov 0 must remove the blow-off',lv)
+pl={}
+for x in (0,1,2):
+ heat=[f'{t/20} P 5000 1 1 3 90' for t in range(200)]
+ lift=[f'{10+t/20} P {5000-t*12:.0f} -.6 0 3 90' for t in range(100)]
+ a=render('v8',f'xpops{x}',[f'0 X pops {x}']+heat+lift);a=a[10*48000:14*48000]
+ pl[x]=max(map(abs,a))/level(a)
+assert pl[0]<=pl[1]*1.02 and pl[2]>pl[0]*1.1,('X pops: 0 must remove the pops, 2 make them stronger/more often',pl)
+lows=[]
+for x in (0,1,2):
+ a=render('v12',f'xbass{x}',[f'0 X bass {x}']+[f'{t/20} P 2500 .5 .5 3 50' for t in range(81)]);s=spectrum(a)
+ lows.append(10*math.log10(energy(s,40,150)/energy(s,600,3000)))
+assert lows[0]<lows[1]-5 and lows[2]>lows[1]+5,('X bass',lows)
+lines=[]
+for i in range(400):
+ t=i/50;lines.append(f'{t} P {2000+1500*math.sin(t)} .6 .7 3 60')
+ if i%40==20:lines.append(f'{t} X {["offgas","turbo","bov","pops","bass"][i//40%5]} {(i//40)%3}')
+ if i==200:lines.append(f'{t} E i6')
+a=render('v8','xchanges',['0 T 1']+lines);clicks(a)
+assert not subprocess.run([str(BIN),'--info'],input='',capture_output=True).returncode
+print(f'X: turbo 0 {20*math.log10(lv["X turbo 0"][0]/lv[""][0]+1e-12):.0f} dB, bov 0 {20*math.log10(lv["X turbo 0;X bov 0"][1]/lv["X turbo 0"][1]+1e-12):.0f} dB, pops crest {pl[0]:.1f}/{pl[1]:.1f}/{pl[2]:.1f}, bass low/mid {lows[0]:.1f}/{lows[1]:.1f}/{lows[2]:.1f} dB')
+print('PASS: levels, pitch, brightness, transients, transitions, mute, stale input, quit, smooth shifts, response, off-gas balance and X settings')

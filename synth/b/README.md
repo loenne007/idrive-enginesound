@@ -21,7 +21,7 @@ make car           # x86-64 ELF (zig cc, glibc <= 2.27, interpreter /lib/ld-linu
 
 `make car` uses `$(HOME)/.local/zig/zig-aarch64-macos-0.17.1/zig` (override `ZIG`) with
 `-target x86_64-linux-gnu.2.27 -O2 -s -Wl,--dynamic-linker=/lib/ld-linux-x86-64.so.2` (the head unit has no
-`/lib64`), copies the stripped ELF to `../../tool/lfb-enginesound/es-synth-b`, and checks the interpreter (`file`)
+`/lib64`), copies the stripped ELF to `../tool/lfb-enginesound/es-synth`, and checks the interpreter (`file`)
 and the glibc symbol versions (`check_glibc.py`, details in `build/glibc-symbols.txt`).
 
 `samples/*.wav` are 40-second **mono** previews ((L+R)/2 of the stereo render: the stereo widener's side
@@ -60,8 +60,17 @@ Newline-terminated ASCII on stdin, typically 20-100 Hz:
 | `T 0\|1` | turbo off (faded, as Engine_Sim's `release()`) / on |
 | `V 0..1` | volume (Engine_Sim's master gain, 50 ms smoothing) |
 | `M 0\|1` | unmute/mute, about 300 ms to 95 % |
-| `S fromGear toGear` | gear change (both > 0): Engine_Sim's shift sequence with its events |
+| `S fromGear toGear` | gear change of the car's automatic (ZF 8HP), both > 0: smooth, no ignition cut (see Control model) |
+| `X name value` | sound setting, 0..2, 1 = default, smoothed, kept across `E`, unknown names ignored (below) |
 | `Q` | fade out, exit after 800 ms |
+
+| `X` name | Effect |
+| --- | --- |
+| `offgas` | multiplies the level off the throttle (idle, light load, coasting); full load is unaffected; floor -18 dB |
+| `turbo` | turbo whistle/spool/rush level (0 = none; `T 0` also removes the layer and its muffling) |
+| `bov` | diverter-valve whoosh on a lift after boost (0 = none) |
+| `pops` | pops and crackle: level and how often (0 = none, 1 = Engine_Sim's own rate, 2 = twice as likely/dense, louder) |
+| `bass` | 150 Hz low shelf ahead of the output stage: 9 * (value - 1) dB, so -9 / 0 / +9 dB at 0 / 1 / 2 |
 
 Malformed/nonfinite values and unknown engine names are ignored; P values are clamped. Overlong lines are
 discarded; one bounded nonblocking read per block. No P for 1.5 s fades out (also at start-up) and new data
@@ -71,14 +80,14 @@ that keep the device buffer full, EAGAIN drop, underrun recovery, reopen every t
 ## Architecture
 
 ```
-P/S lines -> control model (synth.c) -> params object every 768 frames (16 ms, an "animation frame")
+P/S/X lines -> control model (synth.c) -> params object every 384 frames (8 ms; the browser uses 16 ms frames)
           -> per engine voice (engine.c):
                combustion events (combustion-worklet.js) -> per-bank exhaust waveguides -> transit delays
                  -> collector waveguide -> muffler -> 4x-oversampled shock nonlinearity -> tremolo, turbine shelf
                + exhaust flow noise and pop/flutter sends into the pipes, intake Helmholtz + induction noise,
                  sub layer, transmission whine/rattle, turbo layer, transient bank
-          -> mix bus (Engine_Sim's default mix) -> shared output stage (fx.c):
-               infrasonic LR4, bass enhancer, tone shelves, cabin (exterior), air, convolution reverb,
+          -> mix bus (Engine_Sim's default mix) x off-gas balance -> shared output stage (fx.c):
+               X bass shelf, infrasonic LR4, bass enhancer, tone shelves, cabin (exterior), air, convolution reverb,
                stereo widener, three-band compressor, limiter, volume, safety clipper -> x0.89 -> S16
 ```
 
@@ -109,48 +118,74 @@ differed by up to 6 dB from the browser.
 
 Engine_Sim derives its params object from a simulated drivetrain; here it is built from the car data:
 
-- rpm: the P value smoothed with 30 ms (P arrives at ~50 Hz); `dRpm` from it, smoothed 50 ms; `f0 = rpm/120`.
-- combustion load: `max(load, 0)` (torque share), zeroed by shift fuel cuts / replaced by the downshift blip,
-  then smoothed exactly as physics.js (12/s). Pedal = the P throttle.
+- rpm: the P value as it is, applied every 8 ms; the voices' own 20 ms `setTargetAtTime` (Engine_Sim) rounds
+  the 50 Hz steps. Response to a step: ~28 ms to 63 % (it was ~150 ms with the earlier 30 ms smoothing and
+  8000 rpm/s slew limit). `dRpm` from it, smoothed 50 ms; `f0 = rpm/120`.
+- combustion load: `max(load, 0)` (torque share) x the shift envelope, smoothed exactly as physics.js (12/s).
+  Pedal = the P throttle.
 - overrun: physics.js's DFCO term with "wheels drive the engine" taken from `load < 0`, smoothed 8/s.
 - exhaust heat, fuel cut and pops: physics.js `_stepExhaustThermal` (EGT with 5 s / 26 s time constants,
   lift-off bang probability from heat, revs and how hard the pedal was snapped shut, unburnt-fuel charge,
-  `popIntensity` for the crackle stream, blip bang) - with fuel cut only after the overrun (load <= 0) has
-  lasted 0.1 s.
-- turbo: physics.js `_stepTurbo` boost pressure and blow-off event; the audible spool, whine, flutter etc. are
-  the TurboLayer's own model, unchanged.
-- shifts (`S a b`): shift.js's manual box for the 'sports' car (95 ms): cut 30 ms, open 35 ms (70 ms on a
-  downshift, with a 0.85 rev-match blip), sync 18 ms, engage 50 ms (smoothstep clutch), lash, shuffle 360 ms;
-  heat-gated probabilistic `evCut` bang, `evEngage` from the ratio step, `evShiftDone`, `evLash` from the pedal.
+  `popIntensity` for the crackle stream) - fuel cut only after the overrun (load <= 0) has lasted 0.1 s, and a
+  lift only pops (and charges the pipe) after the pedal was held above 0.3 for at least 0.5 s. `X pops` scales
+  the bang probability, the crackle intensity and the reports' level.
+- turbo: physics.js `_stepTurbo` boost pressure and blow-off event from the driver's load (never from a shift);
+  the valve is only armed after a sustained (0.5 s) boost load. The audible spool and whine are the
+  TurboLayer's model, then scaled down (see Turbo level).
+- shifts (`S a b`): the car is a ZF 8HP automatic, so no ignition cut, clutch, re-engage, clunk, shift phase,
+  bang, flutter or blow-off. Upshift: combustion load x (1 - 0.15 env), env a smoothstep up to 1 at 70 ms after
+  the S line and back to 0 by 180 ms; downshift: +0.12 load blip (30 ms rise, 120 ms decay). The bark (tip-in)
+  is suppressed during and 0.45 s after the envelope, so the recovery never sounds like a stab. Engine_Sim's own
+  'auto' type was not used: it still cuts 55 % of the torque. Checked in check.py: the same drive with and
+  without the S line differs by at most 0.4 dB (upshift on a ramp or as an rpm step) and 2.2 dB (overrun
+  downshift) in the 85 ms RMS envelope; every demo upshift stays within 1.8 dB of the level around it.
+- the demo ramps rpm through each upshift in 350 ms (like the car's telemetry), gears 2+ pull from 60 % of
+  redline (an 8HP step), and coasting downshifts lift the revs smoothly in 300 ms.
 - gear ratio, propshaft rpm (from speed, wheel radius 0.33 m, final drive 3.73) and gear teeth: gearbox.js's
   design for each engine in the 'sports' vehicle; gears beyond the designed box reuse the top gear.
 
 Sound settings are Engine_Sim's defaults, as used for its demo samples: default mix, tone 1/1/1, flat EQ,
-reverb 0.32/0.14/4200 Hz, width 0.35, dynamics 1, exterior, live inputs 0, turbo config defaults.
+reverb 0.32/0.14/4200 Hz, width 0.35, dynamics 1, exterior, live inputs 0, turbo config defaults - with these
+owner-requested changes:
+
+- Turbo level: the turbo layer (whistle, spool, rush) is scaled by 0.085 at full spool and fades in only above
+  45 % spool, so it is inaudible at cruise/part load and about -25 to -31 dB under the rest of the engine at
+  full load near redline (i6 -30.7, v8 -30.7, v10 -25.5, v12 -25.0 dB, bus-solo renders). No compressor surge
+  ("stu-stu" flutter, wastegate burst whistle) - BMW engines have recirculating diverter valves. The blow-off is
+  that recirculating valve (layers.js `valve: 2`: lower, duller, no atmospheric hiss) at 3x: a short soft
+  whoosh peaking about -18 to -23 dB under the engine level just before the lift (i6 -23.4, v8 -20.9, v10 -20.3,
+  v12 -18.1 dB). The turbine's muffling of the exhaust and intake is unchanged.
+- Off-gas balance: Engine_Sim puts coasting 12-17 dB under full load on the V engines (and the V8's idle above
+  it). A per-preset correction on the mix bus, blended by state (idle / light load / coasting; none at full
+  load), brings every off-throttle state to about 7-8 dB under full load without making full load louder.
+  Measured (2500 rpm load 0.15; 3000 rpm load -0.4; 0.8 x redline full load), dB under full load, before -> after:
+  i6 idle 7.3 -> 7.3, light 6.3 -> 7.1, coast 4.4 -> 7.0; v8 -1.0 -> 7.1, 5.2 -> 6.9, 12.7 -> 8.1;
+  v10 10.2 -> 8.3, 6.9 -> 7.7, 15.3 -> 8.3; v12 7.7 -> 7.5, 7.8 -> 7.6, 16.7 -> 8.3.
 
 ## Validation
 
 `validate/` replays the port's own per-frame params (`ES_DUMP_PARAMS=file`) through the real Engine_Sim graph
 in headless Chrome (OfflineAudioContext, its `_writeParams`), so both get identical control data, and compares
 (`compare.py`): 1/3-octave long-term spectrum, RMS envelope (100 ms), spectral centroid, steady-state level,
-crest factor and half-order harmonic levels. `ES_VALIDATE=1` disables the +3 dB render make-up for the
-comparison; the port's final x0.89 is divided out. 30 s scenario: idle, 2500 rpm cruise, a pull, an upshift,
+crest factor and half-order harmonic levels. `ES_VALIDATE=1` disables the +3 dB render make-up, the off-gas
+correction, the X settings and the turbo/blow-off changes for the comparison (the automatic-gearbox shifts are in
+the params, so both sides get them); the port's final x0.89 is divided out. 30 s scenario: idle, 2500 rpm cruise, a pull, an upshift,
 a lift with pops, 4000 rpm part load, 0.85 x redline full load. Results (C - browser):
 
 | preset | 1/3-oct mean abs / max (31 Hz-16 kHz) | RMS envelope mean abs, corr | total level | steady states: level, crest, centroid |
 | --- | --- | --- | --- | --- |
-| i6 (turbo) | 0.16 / 0.6 dB | 0.47 dB, 0.991 | -19.27 / -19.29 dB | within 0.4 dB, 0.5 dB, 4 % |
-| v8 (turbo) | 0.33 / 1.2 dB | 0.66 dB, 0.981 | -20.34 / -20.05 dB | within 0.5 dB, 0.5 dB, 8 % |
-| v10 | 0.15 / 0.9 dB | 0.44 dB, 0.993 | -22.85 / -22.80 dB | within 0.4 dB, 0.1 dB, 2 % |
-| v12 | 0.20 / 1.0 dB | 0.41 dB, 0.992 | -23.80 / -23.75 dB | within 0.3 dB, 0.6 dB, 2 % |
-| v12 + turbo | 0.23 / 1.1 dB | 0.40 dB, 0.993 | -23.86 / -23.82 dB | within 0.3 dB, 0.7 dB, 9 % |
+| i6 (turbo) | 0.19 / 0.7 dB | 0.40 dB, 0.994 | -19.37 / -19.41 dB | within 0.4 dB, 0.5 dB, 5 % |
+| v8 (turbo) | 0.20 / 1.0 dB | 0.64 dB, 0.982 | -20.36 / -20.23 dB | within 0.5 dB, 0.5 dB, 8 % |
+| v10 | 0.10 / 0.4 dB | 0.40 dB, 0.995 | -22.93 / -23.00 dB | within 0.4 dB, 0.1 dB, 2 % |
+| v12 | 0.11 / 0.7 dB | 0.33 dB, 0.996 | -23.90 / -23.97 dB | within 0.3 dB, 0.6 dB, 2 % |
+| v12 + turbo | 0.13 / 0.5 dB | 0.37 dB, 0.995 | -23.97 / -23.97 dB | within 0.3 dB, 0.7 dB, 9 % |
 
 Half-order harmonic levels at the steady states differ by 0.4-2.6 dB on average (cycle-to-cycle combustion
 variation is random in both, so individual harmonics wander). Spectrograms: `build/compare.png`.
 
 ## Performance
 
-`--bench` on an Apple M4 Max core, every preset with the turbo on: i6 38.8x, v8 37.8x, v10 36.4x, v12 35.2x
+`--bench` on an Apple M4 Max core, every preset with the turbo on: i6 36.8x, v8 35.6x, v10 34.8x, v12 33.6x
 realtime. The cost is dominated by Chromium's oversampling FIRs (4x on the exhaust and the turbo whine, 2x on
 five more shapers) and the per-event combustion pulses. Optimisations that do not change the result: symmetric
 FIR folding, fast exp/log polynomials (rel. error ~1e-7), coefficient refresh only when a parameter moved,
@@ -161,7 +196,9 @@ the wastegate/flutter shapers while gated off, the whole DSP while muted or with
 
 - Idle/redline are this app's (the controller maps the car's rpm onto them); everything Engine_Sim derives from
   them (rpmNorm, sub-layer order, turbo onset, rattle, crackle thresholds) uses these values.
-- The drivetrain, shift and gearbox simulations are replaced by the control model above.
+- The drivetrain, shift and gearbox simulations are replaced by the control model above; shifts are an
+  automatic's torque envelope instead of the manual sequence; params are rebuilt every 8 ms instead of 16 ms.
+- Turbo much quieter, no flutter, recirculating valve; off-gas balance correction; the X settings.
 - Biquad coefficients are refreshed every 16 frames (0.33 ms) instead of every sample when a parameter moves;
   audio-rate frequency modulation of two turbo flutter band-passes is sampled at that rate too.
 - Oscillator band-limited table choice is made every 16 frames; noise buffers that Engine_Sim fills with
@@ -175,9 +212,10 @@ the wastegate/flutter shapers while gated off, the whole DSP while muted or with
 
 ## Remaining weaknesses
 
-- The control model only approximates Engine_Sim's physics: no clutch slip or driveline shuffle dynamics, the
-  lash/engage magnitudes are estimates, and the virtual rpm is the car's scaled rpm (no simulated rev-limiter
-  bounce, no rev-match rise on blips).
+- The control model only approximates Engine_Sim's physics: no driveline shuffle, and the virtual rpm is the
+  car's scaled rpm (no simulated rev-limiter bounce). Pops stay stochastic as in Engine_Sim: a given lift may not
+  pop at the default `X pops 1`.
+- The off-gas correction was fitted at fixed test points; other rpm/load combinations land within a few dB.
 - Validation is objective (spectra, envelopes, harmonics), not a listening test, and covers one scenario per
   preset; actual Atom E3950 CPU load, SmartX latency and in-car loudness still need measuring on the car.
 
