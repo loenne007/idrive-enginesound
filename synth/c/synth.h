@@ -23,6 +23,7 @@ typedef struct {
     float angle[MAXCYL];         /* firing angle of order[i], degrees of the 720-degree cycle */
     int banks, split;            /* exhaust paths 1 or 2; cylinders 1..split feed path 0, the rest path 1 */
     float bank_diff;             /* path 1's pulses weaker and wider by this fraction (manifold asymmetry) */
+    float over_irr;              /* irregularity of the motoring pulses on the overrun */
     float pulse_w;               /* pulse width scale (1 = nominal; < 1 = harder, shorter pulses) */
     float cov, jitter, trim;     /* cycle-to-cycle amplitude COV (at load), timing jitter (deg rms), static trims */
     float inertia, torque;       /* kg m^2, N m: crank-speed ripple per firing */
@@ -87,7 +88,7 @@ typedef struct {
     Pulse pool[MAXP];
     int np;
     float v;              /* crank-speed ripple */
-    uint32_t seed, pseed;
+    uint32_t seed, pseed, tseed;
     float gains[3][5];    /* gradient calibration per output over load */
     float srms[3][5];     /* pressure RMS per output over load (noise riding calibration) */
     float prev[3], lp[3];
@@ -117,10 +118,11 @@ typedef struct {
     /* control-rate values */
     float x, h, rasp_g, rasp_fc, nz_norm, nl_drive, nl_mk, lvl, lvl_full, f0, lpk, ripple, sub_g, sub_order;
     float in_hg, in_dg, in_ng, in_norm, rpm_n, over, tb_bnorm, tb_anorm, bov_norm, bov_tgt;
-    float corr[2][NCAL];  /* loudness calibration: no load, full load */
+    float corr[3][NCAL];  /* loudness calibration: no load, full load, overrun */
     float corr_s, corr_l, corr_h; /* the applied correction; its no-load and full-load parts, smoothed */
     float xl_s, xl_s2;    /* the level map's load: quick up, gliding down (linear, then rounded) */
-    float x_glide;        /* the timbre's load, gliding down after a lift */
+    float x_g1, x_glide;  /* the timbre's load: two one-poles */
+    float idle_t, idle_tgt, idle_w, idle_mod; /* idle-speed hunting */
     float weight;         /* crossfade weight */
     unsigned tick;
 } Voice;

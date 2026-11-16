@@ -115,6 +115,7 @@ void voice_init(Voice *v, const Preset *p, int index) {
     tables_init();
     memset(v, 0, sizeof(*v));
     v->seed = 0x2545F491u ^ (uint32_t)(index * 2654435761u + 17);
+    v->tseed = 0x1B873593u ^ (uint32_t)(index * 7919u + 11); /* turbo and whoosh: their own stream too */
     v->pseed = 0x68E31DA4u ^ (uint32_t)(index * 40503u + 3); /* pops: their own stream, the engine never changes */
     v->nout = nb + 1;
     /* events: exhaust at the firing angle, intake 360 degrees later; fixed per-cylinder trims */
@@ -247,24 +248,41 @@ static void voice_control(Voice *v, const Preset *p, const Ctl *c) {
     v->bark *= expf(-dt / .15f);
     if (v->thr_lo < .15f) v->bark = fmaxf(v->bark, clampf((thr - v->prev_thr) / dt / 8, 0, 1));
     v->prev_thr = thr;
-    /* a lift-off is not instant in the engine either (the manifold empties): the timbre's load glides down over
-     * 0.4 s. Applied as an offset on top of the shift-dipped load, so a shift's torque dip keeps its shape. */
+    /* Lift-off / tip-in, as a real engine does it: the TIMBRE follows the load fast (two one-poles, 30 ms down:
+     * 90 % in ~115 ms, the edge and rasp gone; 10 ms up), the LOUDNESS settles a little later (below). Both are
+     * critically damped (monotonic, no overshoot, no dip-and-recover). The timbre path is an offset on top of the
+     * shift-dipped load, so a shift's torque dip keeps its own shape. */
     {
-        float raw = clampf(c->lvl_load, 0, 1);
-        v->x_glide = raw > v->x_glide ? raw : fmaxf(raw, v->x_glide - dt / .4f);
+        float raw = clampf(c->lvl_load, 0, 1), k = tau_k(raw > v->x_glide ? .010f : .030f, SR / (float)CTRL);
+        v->x_g1 += (raw - v->x_g1) * k;
+        v->x_glide += (v->x_g1 - v->x_glide) * k;
         x = clampf(pl + (v->x_glide - raw) + .25f * v->bark, 0, 1);
     }
     v->x = x;
     xl = clampf(clampf(c->lvl_load, 0, 1) + .25f * v->bark, 0, 1);
     v->h = x;
+    /* overrun (fuel cut): its character comes in within ~50 ms; the firing returns over ~120 ms when the fuel comes
+     * back near idle, in ~25 ms on a tip-in */
     over = (c->load < -.05f && rpm > p->idle + 250) ? 1.f : 0.f;
-    v->over += (over - v->over) * tau_k(over > v->over ? .25f : .06f, SR / (float)CTRL); /* overrun timbre settles */
+    v->over += (over - v->over) * tau_k(over > v->over ? .05f : thr > .2f ? .025f : .12f, SR / (float)CTRL);
+    /* idle: the idle-speed control hunts a little (+-1.5 % around idle, ~0.3-1.5 Hz), only near idle and off load */
+    {
+        float near = clampf(1 - (rpm - p->idle) / 400, 0, 1) * (1 - x);
+        v->idle_t -= dt;
+        if (v->idle_t <= 0) {
+            v->idle_tgt = gauss(&v->seed) * .011f;
+            v->idle_t = .35f + .5f * (.5f + .5f * rnd(&v->seed));
+        }
+        v->idle_w += (v->idle_tgt - v->idle_w) * tau_k(.18f, SR / (float)CTRL);
+        v->idle_mod = 1 + near * v->idle_w;
+    }
     /* crank-speed ripple per firing ~ T (4 pi / n) / (J w^2), capped */
     {
         float w = fmaxf(40, rpm * PI_F / 30), T = p->torque * (.12f + .88f * x);
         v->ripple = fminf(.12f, .3f * T * (4 * PI_F / p->n) / (p->inertia * w * w));
     }
-    v->lpk = 1 - expf(-2 * PI_F * fminf(p->knee * v->f0, .45f * SR) / SR);
+    /* radiation knee; motoring pulses on the overrun are rounder (the knee drops by a third) */
+    v->lpk = 1 - expf(-2 * PI_F * fminf(p->knee * (1 - .33f * v->over) * v->f0, .45f * SR) / SR);
     /* levels. Off the gas sits OFFGAS_AMP (x the offgas setting) under full load; rpm adds ~4 dB to redline */
     off = clampf(OFFGAS_AMP * X[X_OFFGAS], 0, 1);
     /* full load rises LVL_RPM dB from idle to redline; the calibration takes the pipes' own colour out first */
@@ -273,6 +291,8 @@ static void voice_control(Voice *v, const Preset *p, const Ctl *c) {
         int k = u >= NCAL - 1 ? NCAL - 2 : (int)u;
         u -= k;
         cl = v->corr[0][k] + u * (v->corr[0][k + 1] - v->corr[0][k]);
+        /* on the overrun the motoring timbre has its own calibration */
+        cl += v->over * (v->corr[2][k] + u * (v->corr[2][k + 1] - v->corr[2][k]) - cl);
         ch = v->corr[1][k] + u * (v->corr[1][k + 1] - v->corr[1][k]);
         v->lvl_full = powf(10, LVL_RPM / 20 * (u + k) / (NCAL - 1)) * c->level;
         /* the correction follows the rpm in ~40 ms: after a fast rpm drop the pipes' low resonances need that long to
@@ -281,23 +301,25 @@ static void voice_control(Voice *v, const Preset *p, const Ctl *c) {
             float k = v->corr_s > 0 ? tau_k(.04f, SR / (float)CTRL) : 1; /* (corr_s doubles as "started") */
             v->corr_l += (cl - v->corr_l) * k;
             v->corr_h += (ch - v->corr_h) * k;
-            v->corr_s = v->corr_l + x * (v->corr_h - v->corr_l); /* the load blend follows the timbre (x) */
+            /* the load blend follows the timbre's lift/tip-in path, but not a shift's torque dip (that would swell
+             * the level by pulling in the light-load correction) */
+            float xc = clampf(v->x_glide + .25f * v->bark, 0, 1);
+            v->corr_s = v->corr_l + xc * (v->corr_h - v->corr_l);
         }
-        /* the level map follows the load quickly up (50 ms) but glides down linearly (full load to off-gas in
-         * 0.6 s), so a lift-off sounds like the engine going onto the overrun, not like a fade */
-        if (xl > v->xl_s)
-            v->xl_s += (xl - v->xl_s) * tau_k(.05f, SR / (float)CTRL);
-        else
-            v->xl_s = fmaxf(xl, v->xl_s - dt / .6f);
-        /* a second, 0.1 s stage rounds the start of the glide (going up it only adds ~5 ms) */
-        v->xl_s2 += (v->xl_s - v->xl_s2) * tau_k(v->xl_s > v->xl_s2 ? .005f : .1f, SR / (float)CTRL);
+        /* the loudness settles after the timbre: two one-poles, 45 ms down (90 % in ~175 ms, settled by 300 ms),
+         * 12 ms up (back on load in ~50 ms) */
+        {
+            float k = tau_k(xl > v->xl_s2 ? .012f : .045f, SR / (float)CTRL);
+            v->xl_s += (xl - v->xl_s) * k;
+            v->xl_s2 += (v->xl_s - v->xl_s2) * k;
+        }
         float map = off + (1 - off) * powf(v->xl_s2, 1.5f);
         v->lvl = v->lvl_full * map * v->corr_s;
         /* pops keep their own absolute level whatever the off-gas level and its glide */
         v->pop_norm = POP_REF / fmaxf(map, .05f);
     }
     /* the turbulent noise riding on the pulses: more with load and revs, half on the overrun */
-    v->rasp_g = .4f * p->rasp * (.3f + .7f * x) * (.45f + .8f * rpm_n) * (1 - .25f * v->over);
+    v->rasp_g = .4f * p->rasp * (.3f + .7f * x) * (.45f + .8f * rpm_n) * (1 - .6f * v->over);
     /* the band opens with load: dark at cruise and part load (no hiss), the full rasp under heavy load */
     v->rasp_fc = clampf(p->rasp_hz * (.3f + .7f * x * x) * (.7f + .5f * rpm_n), 200, 9000);
     /* broadband jet noise: lowpass at rasp_fc (a one-pole highpass at ~200 Hz in the sample loop: below that it would only feed the pipes' low modes) */
@@ -309,9 +331,10 @@ static void voice_control(Voice *v, const Preset *p, const Ctl *c) {
     for (i = 0; i < 3; i++)
         v->muf_g[i] = clampf(.55f + .30f * p->refl, .05f, .9f) * powf(.92f, (float)i) * (1 - .12f * x) * .6f;
     bq_lowpass(&v->packing, v->packing_base * (1 + .3f * x + .15f * rpm_n), .6f);
-    /* shock steepening: drive rises with load^1.5, revs, boost; a little on the overrun */
+    /* shock steepening: drive rises with load^1.5 and revs; a little on the overrun */
     {
-        float a = powf(x, 1.5f) * (.55f + .45f * rpm_n) + .3f * v->spool * v->spool * x * fminf(X[X_TURBO], 1) + .08f * v->over;
+        /* (no boost term: it put level the calibration does not know and unwound unevenly after a lift) */
+        float a = powf(x, 1.5f) * (.55f + .45f * rpm_n) + .08f * v->over;
         v->nl_drive = 1 + 3.2f * p->shaper * clampf(a, 0, 1);
         v->nl_mk = powf(v->nl_drive, -.72f) / NL_IN;
     }
@@ -344,7 +367,9 @@ static void voice_control(Voice *v, const Preset *p, const Ctl *c) {
         bq_bandpass(&v->tb_air, 2600 + 1600 * v->spool, .9f);
         v->tb_anorm = bp_norm(2600 + 1600 * v->spool, .9f);
         v->tb_lvl = TURBO_K * v->spool * v->spool * X[X_TURBO];
-        bq_highshelf(&v->turbine, 900, on ? -2.5f - 3.5f * v->spool : 0);
+        /* the turbine darkens the exhaust with the gas flowing through it: spool AND load (on a lift the flow stops
+         * at once; a shelf that waited for the shaft to spool down left a dip-and-recover) */
+        bq_highshelf(&v->turbine, 900, on ? -2.5f - 3.5f * v->spool * v->x_glide : 0);
         /* recirculation valve (BMW: no blow-off to atmosphere): a short soft whoosh when the pedal is released
          * fast at boost. Armed by boost, fired by the pedal; a gear shift never moves the pedal. */
         v->thr_slow += (thr - v->thr_slow) * tau_k(.12f, SR / (float)CTRL);
@@ -361,7 +386,7 @@ static void voice_control(Voice *v, const Preset *p, const Ctl *c) {
             v->bov_t += dt;
         } else
             v->bov_peak = 0;
-        v->bov_tgt = v->bov_t < .012f ? v->bov_peak : 0;
+        v->bov_tgt = v->bov_t < .03f ? v->bov_peak : 0;
     }
 
     /* overrun pops: a genuine lift-off after sustained load (0.6 s average) on a hot engine opens a window of
@@ -398,11 +423,11 @@ float voice_step(Voice *v, const Preset *p, const Ctl *c) {
     /* ---- crank and events ---- */
     {
         const float x = v->x, low = 1 - v->rpm_n;
-        const float cov = p->cov * (.7f + 2.3f * (1 - x) * (1 - x)) * (1 + low);
+        const float cov = p->cov * (.7f + 2.3f * (1 - x) * (1 - x)) * (1 + low) * (1 + 1.5f * p->over_irr * v->over);
         const float spread = p->jitter * (.6f + 1.4f * (1 - x)) * (1 + .8f * low) / 720;
         float ddeg, h = v->h;
         int guard = 0;
-        dph = c->rpm / (120. * SR) * (1 + v->v);
+        dph = c->rpm * v->idle_mod / (120. * SR) * (1 + v->v);
         /* compression drag + a leak standing in for the idle-speed control */
         v->v -= (float)((v->ripple * p->n + 6 * v->v) * (c->rpm / (120. * SR)));
         v->v = clampf(v->v, -.2f, .2f);
@@ -416,6 +441,8 @@ float voice_step(Voice *v, const Preset *p, const Ctl *c) {
                 q->out = e->out;
                 q->rate = 1 / (p->pulse_w * e->w_trim * (1 + .35f * cov * gauss(&v->seed)));
                 q->A = e->amp_trim * fmaxf(.2f, 1 + g * cov * (e->kind ? .5f : 1));
+                /* motoring on the overrun: now and then a weak, lazy pulse (a V8 burbles, a V12 hardly) */
+                if (!e->kind && v->over > .5f && .5f + .5f * rnd(&v->seed) < .07f * p->over_irr) q->A *= .45f;
                 q->age = (float)((v->crank - v->next) * 720) * q->rate;
                 if (!e->kind) v->v += v->ripple * q->A;
             }
@@ -530,17 +557,17 @@ float voice_step(Voice *v, const Preset *p, const Ctl *c) {
 
     /* ---- turbo: blade-pass whistle (mostly narrow-band noise, a little tone) and compressor air ---- */
     if (v->tb_lvl > 1e-5f) {
-        float wn = rnd(&v->seed), s;
+        float wn = rnd(&v->tseed), s;
         v->whine_ph += v->tb_hz / SR;
         if (v->whine_ph >= 1) v->whine_ph -= 1;
         s = .35f * sin_cyc(v->whine_ph) + .8f * bq(&v->tb_band, wn) * v->tb_bnorm +
-            .6f * bq(&v->tb_air, rnd(&v->seed)) * v->tb_anorm;
+            .6f * bq(&v->tb_air, rnd(&v->tseed)) * v->tb_anorm;
         tb = bq(&v->tb_lp, s * v->tb_lvl);
     }
     if (v->bov_peak > 0 || v->bov_env > 1e-6f) {
-        /* ~4 ms attack while the valve opens (12 ms), then a 70 ms decay */
-        v->bov_env = clean(v->bov_env + (v->bov_tgt - v->bov_env) * (v->bov_tgt > v->bov_env ? 1.f / (.004f * SR) : 1.f / (.07f * SR)));
-        bov = bq(&v->bov_bp, rnd(&v->seed)) * v->bov_norm * v->bov_env;
+        /* a soft 20 ms onset while the valve opens (30 ms), then a 70 ms decay: a whoosh, never a click */
+        v->bov_env = clean(v->bov_env + (v->bov_tgt - v->bov_env) * (v->bov_tgt > v->bov_env ? 1.f / (.02f * SR) : 1.f / (.07f * SR)));
+        bov = bq(&v->bov_bp, rnd(&v->tseed)) * v->bov_norm * v->bov_env;
     }
 
     if (calibrating) return ex + in + sub;
@@ -557,7 +584,7 @@ float voice_step(Voice *v, const Preset *p, const Ctl *c) {
 }
 
 /* Loudness calibration: hold the voice at each of NCAL rpm points from idle to redline (125 ms to settle, 125 ms
- * measured) at no load and at full load, offline on a copy, and store the gain that brings it to CAL_LEVEL. The pipes and the muffler then
+ * measured) at no load, at full load and on the overrun, offline on a copy, and store the gain that brings it to CAL_LEVEL. The pipes and the muffler then
  * keep their colour (which harmonic rings where) but not their overall tilt against rpm, and the level map above
  * decides how loud the engine is. ~20 ms of CPU per voice at start-up. */
 static void voice_calibrate(Voice *v, const Preset *p) {
@@ -567,12 +594,12 @@ static void voice_calibrate(Voice *v, const Preset *p) {
     int L, k;
     long i;
     Ctl c;
-    for (L = 0; L < 2; L++) for (k = 0; k < NCAL; k++) v->corr[L][k] = 1;
+    for (L = 0; L < 3; L++) for (k = 0; k < NCAL; k++) v->corr[L][k] = 1;
     calibrating = 1;
-    for (L = 0; L < 2; L++) {
+    for (L = 0; L < 3; L++) { /* no load, full load, overrun (below idle + 250 rpm the overrun is no load) */
         t = *v;
-        c.load = c.lvl_load = L ? .95f : 0;
-        c.throttle = L ? 1 : .02f;
+        c.load = c.lvl_load = L == 1 ? .95f : L == 2 ? -.6f : 0;
+        c.throttle = L == 1 ? 1 : L == 2 ? 0 : .02f;
         c.level = 1;
         c.turbo = 0;
         c.shift_guard = 1;

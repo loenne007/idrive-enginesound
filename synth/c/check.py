@@ -107,7 +107,9 @@ for p in info['presets']:
     bad, worst = clicks(a); check(bad == 0, f'{name}: {bad} clicks (worst slope ratio {worst:.1f})')
     worst_shift = 0
     for ts in (8.6, 10.8, 13.6, 17.0, 27.5, 29.5, 33.2):  # the demo's upshifts (full load, light load, after kickdown)
-        e = envelope(a[int((ts - .5) * SR):int((ts + 1) * SR)], 10)  # ~105 ms: the V8's own roughness is +-4 dB
+        # ~165 ms: the demo cannot separate a shift from the V8's roughness and its exhaust resonance near 6300 rpm
+        # (the strict test, the same drive with and without S, is further below)
+        e = envelope(a[int((ts - .5) * SR):int((ts + 1) * SR)], 16)
         lo, hi = window_ok(e, .5, 3)
         worst_shift = max(worst_shift, -lo, hi)
         # 3.5 dB (engine A's demo limit): the V8's own roughness alone moves this 100 ms envelope by ~3 dB; the
@@ -144,16 +146,57 @@ for p in info['presets']:
     full, coast, light, idle, f25 = (lvl(a, 1, 2), lvl(a, 3, 4), lvl(a, 5, 6), lvl(a, 7, 8), lvl(a, 9, 10))
     check(3 <= full - coast <= 5, f'{name}: coast {full - coast:.1f} dB under full load (want 3-5)')
     check(3 <= full - light <= 5, f'{name}: light load {full - light:.1f} dB under full load (want 3-5)')
-    # the lift at 2.0 s glides: 50-150 ms after it the level is within 2 dB of the full-load level before it
-    glide = lvl(a, 1.6, 2.0) - lvl(a, 2.05, 2.15)
-    check(glide <= 2, f'{name}: {glide:.1f} dB down 100 ms after a lift-off (want <= 2: a glide, not a drop)')
+    # a lift-off from full load at 4000 rpm (rpm then falling 300 rpm/s): the level settles smoothly and
+    # monotonically (100 ms RMS every 10 ms: never more than 1 dB under the settled level, no rise of more than
+    # 1 dB on the way down, 90 % of the drop within 300 ms); the timbre goes first (the centroid has made >= 60 %
+    # of its fall by 150 ms)
+    # sixteen lifts in one render, each after a different load duration (so each lands at another point of the
+    # random stream), envelopes (100 ms RMS every 10 ms) and centroids averaged at the lift: the transition, not
+    # the engine's own cycle-to-cycle randomness
+    lift = ['0 X pops 0', '0 X bov 0']  # the engine itself (pops and the whoosh are checked below)
+    T0 = []; t0 = 0
+    for n8 in range(16):
+        dur = 1.6 + .071 * n8
+        lift += [f'{t0 + t / 50:.2f} P 4000 .95 1 3 60' for t in range(int(dur * 50))]
+        lift += [f'{t0 + dur + t / 50:.2f} P {4000 - 300 * t / 50:.0f} -0.6 0 3 60' for t in range(60)]
+        T0.append(t0 + dur); t0 += dur + 1.2
+    b = render(name, 'lift', lift)
+    env = [10 * math.log10(sum(10 ** (lvl(b, L0 + k / 100 - .05, L0 + k / 100 + .05) / 10) for L0 in T0) / 16)
+           for k in range(-40, 100)]  # t = -0.4 .. 0.99 s
+    at = lambda t: env[int(round(t * 100)) + 40]
+    pre = sum(env[:35]) / 35; settled = sum(at(t / 100) for t in range(50, 90)) / 40
+    way = [at(t / 100) for t in range(0, 40)]
+    dip = settled - min(way); rise = max(way[k] - min(way[:k + 1]) for k in range(len(way)))
+    t90 = next((t / 100 for t in range(0, 99) if at(t / 100) <= pre - .9 * (pre - settled)), 1)
+    def spec(t):
+        x = b[int(t * SR) - 2048:int(t * SR) + 2048]
+        s = fft([v * (.5 - .5 * math.cos(2 * math.pi * i / 4095)) for i, v in enumerate(x)])
+        return sum(i * SR / 4096 * v for i, v in enumerate(s)) / sum(s), 10 * math.log10(sum(s[86:]) / sum(s))
+    def avg(ts):
+        r = [spec(t) for t in ts]; return sum(x[0] for x in r) / len(r), sum(x[1] for x in r) / len(r)
+    (c0, h0), (c1, h1) = avg([L0 - t for L0 in T0 for t in (.1, .25)]), avg([L0 + t for L0 in T0 for t in (.5, .8)])
+    c15, h15 = avg([L0 + .15 for L0 in T0])
+    # the edge and rasp: the share of energy above 1 kHz (the centroid alone is the firing fundamental falling
+    # with the rpm)
+    cfall = (h0 - h15) / (h0 - h1) if h0 - h1 > 3 else 1
+    bad, _ = clicks(b[int((T0[0] - .5) * SR):int((T0[0] + 1) * SR)]); check(bad == 0, f'{name}: clicks at the lift-off')
+    # tip-in from the overrun back to full load: 90 % of the level within ~50-80 ms
+    tip = steady(3000, -.6, 0, 1) + [f'{1 + t / 50:.2f} P 3000 .95 1 3 60' for t in range(51)]
+    tb_ = render(name, 'tipin', ['0 X pops 0'] + tip)
+    tl0, tl1 = lvl(tb_, .5, .95), lvl(tb_, 1.5, 1.95)
+    tin = next((k / 1000 for k in range(0, 500, 5) if lvl(tb_, 1 + k / 1000 - .02, 1 + k / 1000 + .02) >= tl0 + .9 * (tl1 - tl0)), 1)
+    check(tin <= .1, f'{name}: tip-in reaches 90 % only after {tin * 1000:.0f} ms')
+    check(dip <= 1, f'{name}: lift-off dips {dip:.1f} dB under the settled level')
+    check(rise <= 1, f'{name}: lift-off level not monotonic (rises {rise:.1f} dB on the way down)')
+    check(t90 <= .3, f'{name}: lift-off settles (90 %) only after {t90 * 1000:.0f} ms')
+    check(cfall >= .6, f'{name}: the >1 kHz share made only {100 * cfall:.0f} % of its fall 150 ms after the lift')
+    glide = f'lift: {pre - settled:.1f} dB in {t90 * 1000:.0f} ms (dip {max(dip, 0):.1f}, rise {rise:.1f} dB), centroid {c0:.0f} -> {c1:.0f} Hz, >1 kHz share {h0:.0f} -> {h1:.0f} dB ({100 * cfall:.0f} % of it at 150 ms); tip-in 90 % in {tin * 1000:.0f} ms'
     # cruise: no hiss, the band above 3 kHz at least 30 dB under the total
     cr = render(name, 'cruise', steady(3000, .2, .2)); s = spectrum(cr, 1.2)
     hf = 10 * math.log10(energy(s, 3000, 23900) / energy(s, 1, 23900))
     check(hf <= -30, f'{name}: >3 kHz at cruise only {hf:.1f} dB under the total')
     print(f'{name}: firing Hz {pitches}, 1-6 kHz share {sh[0]:.3f} -> {sh[1]:.3f} with load; at 3000 rpm coast '
-          f'{full - coast:.1f} dB and light load {full - light:.1f} dB under full load, {glide:.1f} dB down 100 ms '
-          f'after the lift; idle {f25 - idle:.1f} dB under full load at 2500; >3 kHz at cruise {hf:.1f} dB')
+          f'{full - coast:.1f} dB and light load {full - light:.1f} dB under full load; {glide}; idle {f25 - idle:.1f} dB under full load at 2500; >3 kHz at cruise {hf:.1f} dB')
 
 # ---- response: an rpm step reaches 90 % of the firing-frequency change within ~30 ms -----------------------------
 # (zero crossings of the 0.5..1.5x firing band are too slow to resolve 30 ms; test_core checks the smoothed rpm
