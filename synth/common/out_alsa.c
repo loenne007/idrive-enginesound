@@ -71,14 +71,43 @@ static int open_pcm(Alsa *a, const char *dev, double now) {
         }
         return 0;
     }
-    /* snd_pcm_set_params starts playback once the buffer is full: keep it full (SmartX: 3 x 1024 frames) */
+    /* snd_pcm_set_params starts playback once the buffer is full (SmartX: 3 x 1024 frames = 64 ms). Fill it; once
+     * it runs, keep one period less queued (2 x 1024 = 43 ms): the device still finds a whole period after each
+     * read, and the sound is 21 ms closer to the engine. ES_ALSA_KEEP (frames) overrides. */
     {
         unsigned long buffer = 0, period = 0;
-        if (a->get_params(a->pcm, &buffer, &period) < 0 || buffer < 512) buffer = (unsigned long)us * 48 / 1000;
-        a->target = (long)buffer;
+        const char *k = getenv("ES_ALSA_KEEP");
+        if (a->get_params(a->pcm, &buffer, &period) < 0 || buffer < 512) buffer = (unsigned long)us * 48 / 1000, period = 0;
+        a->buffer = (long)buffer;
+        a->keep = period >= 256 && buffer >= 3 * period ? (long)(buffer - period) : (long)buffer;
+        if (k) {
+            long x = strtol(k, 0, 10);
+            if (x >= 512 && x <= a->buffer) a->keep = x;
+        }
+        a->target = a->buffer;
+        a->started = 0;
+        a->expect = -1;
+        a->taken = a->refused = 0;
+        a->stat_at = now + 2;
+        a->stat_state = 0;
     }
-    fprintf(stderr, "alsa: connected %s (%ld frames buffered)\n", dev, a->target);
+    fprintf(stderr, "alsa: connected %s (%ld frames buffer, %ld kept queued)\n", dev, a->buffer, a->keep);
     return 1;
+}
+
+/* One line when it changes (the service keeps it for the app's Audio page): does the device take our frames?
+ * A SmartX endpoint only takes them while the AudioManager has its source connected. */
+static void status(Alsa *a, double now) {
+    int state;
+    if (now < a->stat_at) return;
+    a->stat_at = now + 2;
+    state = a->taken >= 48000 ? 1 : 2; /* 2 s at 48 kHz = 96000 frames when it plays */
+    if (state != a->stat_state) {
+        a->stat_state = state;
+        fprintf(stderr, state == 1 ? "alsa: playing (the device takes the sound)\n"
+                                   : "alsa: nobody reads this device (its audio source is not connected)\n");
+    }
+    a->taken = a->refused = 0;
 }
 
 long alsa_room(Alsa *a, const char *dev, double now) {
@@ -96,22 +125,37 @@ long alsa_room(Alsa *a, const char *dev, double now) {
             drop_pcm(a, now + 2);
             return -1;
         }
+        a->started = 0, a->target = a->buffer, a->expect = -1; /* recovered: stopped again until the buffer is full */
         return a->target;
     }
     if (delay < 0) delay = 0;
-    return a->target - delay;
+    status(a, now);
+    /* the queue went down by itself: the device takes frames, playback runs: from now one period less is kept */
+    if (!a->started && a->expect >= 0 && delay < a->expect) a->started = 1, a->target = a->keep;
+    a->expect = delay;
+    if (!a->started) return delay < a->buffer ? a->buffer : 0; /* fill it up (a last short write may drop its tail) */
+    return delay >= a->target ? 0 : a->target - delay;          /* (never negative: that means "not open") */
 }
 
 void alsa_write(Alsa *a, const int16_t *buf, unsigned n, double now) {
     long r;
     if (!a->pcm) return;
     r = a->write(a->pcm, buf, n); /* a short write drops the tail: the queue is near its target anyway */
-    if (r >= 0 || r == -EAGAIN) return; /* -EAGAIN: nobody reads (the source not connected): the block goes */
+    if (r >= 0) {
+        a->taken += r;
+        if (a->expect >= 0) a->expect += r;
+        return;
+    }
+    if (r == -EAGAIN) { /* full and nobody reads (the source not connected): the block goes */
+        a->refused++;
+        return;
+    }
     if (a->recover(a->pcm, (int)r, 1) < 0) {
         if (now >= a->log_at) {
             fprintf(stderr, "alsa: %s; reconnecting\n", a->error((int)r));
             a->log_at = now + 2;
         }
         drop_pcm(a, now + 2);
-    }
+    } else
+        a->started = 0, a->target = a->buffer, a->expect = -1; /* an underrun recovered: fill up again */
 }

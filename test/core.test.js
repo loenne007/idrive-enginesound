@@ -79,6 +79,30 @@ function make(over) {
     const v = require('../apps/lfb_enginesound/app.json').settings.find((s) => s.key === 'volume');
     assert.strictEqual(v.default, 50);
 }
+// rpmMap "locked" (the default): a fixed ratio per preset, the firing order on an even order of the car's
+// four-cylinder (order 2), capped just over the redline
+{
+    const spec = require('../apps/lfb_enginesound/app.json').settings.find((x) => x.key === 'rpmMap');
+    assert.strictEqual(spec.default, 'locked');
+    const fire = { i6: 3, v8: 4, v10: 5, v12: 6 };
+    Object.keys(fire).forEach((k) => {
+        const { core } = make({ rpmMap: 'locked', engine: k });
+        const order = fire[k] * core.virtualRpm(3000) / 3000;
+        assert(Math.abs(order - Math.round(order)) < 1e-9 && Math.round(order) % 2 === 0, k + ' fires at order ' + order);
+        assert(core.virtualRpm(4800) <= PRESETS[k].red * 1.03 + 1e-6 && core.virtualRpm(4800) > PRESETS[k].red * 0.85, k + ' top');
+        assert(core.virtualRpm(9000) <= PRESETS[k].red * 1.03 + 1e-6);
+    });
+}
+// between the car's samples the rpm sent moves on along the climb (track.js)
+{
+    const { core, sent, step } = make({ rpmMap: 'real' });
+    core.feed({ rpm: 2000, speed: 50 }); step(60); core.feed({ rpm: 2200 }); step(60); core.feed({ rpm: 2400 });
+    core.tick();                                  // starts playing
+    step(30); core.tick();
+    const p = Number(sent.filter((l) => l[0] === 'P').pop().split(' ')[1]);
+    assert(p > 2450 && p < 2550, 'estimated ahead: ' + p);
+    assert.strictEqual(core.d.rpm, 2400, 'the reading itself is kept');
+}
 // load: torque against the max, overrun negative
 {
     const { core } = make();

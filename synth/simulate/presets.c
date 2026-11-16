@@ -31,7 +31,7 @@ const Preset presets[NP] = {
         .order = {1, 5, 4, 8, 6, 3, 7, 2},
         .angle = {0, 90, 180, 270, 360, 450, 540, 630},
         .banks = 2, .split = 4, .bank_diff = .2f,
-        .over_irr = .7f, .pulse_w = .95f, .cov = .032f, .jitter = .9f, .trim = .03f,
+        .over_irr = .5f, .bass_trim = -5, .offgas_trim = .5f, .pulse_w = .95f, .cov = .024f, .jitter = .9f, .trim = .03f,
         .inertia = .38f, .torque = 600, .c_hot = 432,
         .bank_len = {1.28f, 1.32f}, .collector = 1.10f, .refl = .63f, .damping = .34f,
         .muffler = {.40f, .26f, .17f},

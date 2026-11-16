@@ -116,6 +116,8 @@ void voice_init(Voice *v, const Preset *p, int index) {
     memset(v, 0, sizeof(*v));
     v->seed = 0x2545F491u ^ (uint32_t)(index * 2654435761u + 17);
     v->tseed = 0x1B873593u ^ (uint32_t)(index * 7919u + 11); /* turbo and whoosh: their own stream too */
+    v->eseed = 0x3C6EF372u ^ (uint32_t)(index * 1103515245u + 12345); /* per event */
+    v->dseed = 0xA54FF53Au ^ (uint32_t)(index * 22695477u + 1);      /* slow drifts */
     v->pseed = 0x68E31DA4u ^ (uint32_t)(index * 40503u + 3); /* pops: their own stream, the engine never changes */
     v->nout = nb + 1;
     /* events: exhaust at the firing angle, intake 360 degrees later; fixed per-cylinder trims */
@@ -134,6 +136,7 @@ void voice_init(Voice *v, const Preset *p, int index) {
             e->kind = k;
             e->amp_trim = at;
             e->w_trim = wt;
+            e->cyl = i;
         }
     }
     /* sort by angle (insertion sort) */
@@ -211,6 +214,13 @@ void voice_init(Voice *v, const Preset *p, int index) {
     }
     v->thr_lo = 1;
     v->bov_t = 1;
+    /* low foundation: 32 Hz high-pass, 115 Hz 4th-order low-pass (nothing reaches into the firing orders above) */
+    bq_highpass(&v->fo_hp, 32, .7f);
+    bq_lowpass(&v->fo_lp1, 115, .5412f);
+    bq_lowpass(&v->fo_lp2, 115, 1.3066f);
+    for (i = 0; i < 4; i++) v->fo_amp[i] = v->fo_tamp[i] = 1;
+    bq_bandpass(&v->tick_bp, 4300, 1.3f);
+    bq_lowshelf(&v->trim, 120, p->bass_trim);
     v->nl_mk = v->nl_drive = 1;
     v->weight = 0;
     voice_calibrate(v, p);
@@ -225,14 +235,15 @@ static float bp_norm(float hz, float q) {
  * Control rate
  * ------------------------------------------------------------------------------------------------------------- */
 #define OFFGAS_AMP .60f /* off the throttle (idle, coast, light load): -4.4 dB against full load at offgas 1 */
-#define TURBO_K .0014f   /* turbo at full boost: ~-40 dB under the engine, a faint whistle (set by measurement) */
+#define TURBO_K .0009f   /* turbo at full boost: ~-40 dB under the engine, a faint whistle (set by measurement) */
 #define BOV_K .016f     /* recirculation whoosh peak: ~-14 dB under the full-load engine (CAL_LEVEL) */
 #ifndef POP_K
 #define POP_K 3.6f
 #endif
 #define POP_REF .55f     /* the pops' level against the overrun level they sit on */
 #define NL_IN .3f
-#define LVL_RPM 6.f     /* full-load level rise from idle to redline, dB */
+#define LVL_RPM 8.5f     /* full-load level rise from idle to redline, dB */
+#define TICK_K .005f    /* injector/valvetrain ticks: faint, irregular */
 #define CAL_LEVEL .05f  /* calibrated engine RMS before the level map */       /* shaper input staging */
 
 static void voice_control(Voice *v, const Preset *p, const Ctl *c) {
@@ -270,11 +281,49 @@ static void voice_control(Voice *v, const Preset *p, const Ctl *c) {
         float near = clampf(1 - (rpm - p->idle) / 400, 0, 1) * (1 - x);
         v->idle_t -= dt;
         if (v->idle_t <= 0) {
-            v->idle_tgt = gauss(&v->seed) * .011f;
-            v->idle_t = .35f + .5f * (.5f + .5f * rnd(&v->seed));
+            v->idle_tgt = gauss(&v->dseed) * .011f;
+            v->idle_t = .35f + .5f * (.5f + .5f * rnd(&v->dseed));
         }
         v->idle_w += (v->idle_tgt - v->idle_w) * tau_k(.18f, SR / (float)CTRL);
         v->idle_mod = 1 + near * v->idle_w;
+    }
+    /* cylinders differ, and the differences drift: each cylinder's strength (+-2 %, more at low revs) and timing
+     * (+-0.35 deg) wander towards new targets every ~1-2.5 s with 1.2 s smoothing (not white jitter: it persists) */
+    {
+        const float k = tau_k(1.2f, SR / (float)CTRL);
+        v->cd_t -= dt;
+        if (v->cd_t <= 0) {
+            for (i = 0; i < p->n; i++) {
+                v->cd_tamp[i] = clampf(gauss(&v->dseed) * .02f * (1 + .8f * (1 - rpm_n)), -.06f, .06f);
+                v->cd_tang[i] = clampf(gauss(&v->dseed) * .35f, -1, 1) / 720;
+            }
+            v->cd_t = 1 + 1.5f * (.5f + .5f * rnd(&v->dseed));
+        }
+        for (i = 0; i < p->n; i++) {
+            v->cd_amp[i] += (v->cd_tamp[i] - v->cd_amp[i]) * k;
+            v->cd_ang[i] += (v->cd_tang[i] - v->cd_ang[i]) * k;
+        }
+    }
+    /* the low foundation's orders drift: amplitude 0.75-1.25 and a phase that keeps sliding (0.1-0.6 cycles/s, sign and
+     * speed changing every 1-2.5 s): the paths through the mounts and the body are not locked to the exhaust's own
+     * low orders, so the two never sit in a fixed (rpm-dependent) constructive or destructive sum */
+    {
+        const float k = tau_k(.9f, SR / (float)CTRL);
+        v->fo_t -= dt;
+        if (v->fo_t <= 0) {
+            for (i = 0; i < 4; i++) {
+                v->fo_tamp[i] = clampf(1 + .15f * gauss(&v->dseed), .75f, 1.25f);
+                v->fo_tph[i] = (rnd(&v->dseed) > 0 ? 1 : -1) * (.1f + .5f * (.5f + .5f * rnd(&v->dseed)));
+            }
+            v->fo_t = 1 + 1.5f * (.5f + .5f * rnd(&v->dseed));
+        }
+        for (i = 0; i < 4; i++) {
+            v->fo_amp[i] += (v->fo_tamp[i] - v->fo_amp[i]) * k;
+            v->fo_vel[i] += (v->fo_tph[i] - v->fo_vel[i]) * k;
+            v->fo_ph[i] += v->fo_vel[i] * dt;
+            if (v->fo_ph[i] > 1) v->fo_ph[i] -= 1;
+            if (v->fo_ph[i] < 0) v->fo_ph[i] += 1;
+        }
     }
     /* crank-speed ripple per firing ~ T (4 pi / n) / (J w^2), capped */
     {
@@ -284,16 +333,24 @@ static void voice_control(Voice *v, const Preset *p, const Ctl *c) {
     /* radiation knee; motoring pulses on the overrun are rounder (the knee drops by a third) */
     v->lpk = 1 - expf(-2 * PI_F * fminf(p->knee * (1 - .33f * v->over) * v->f0, .45f * SR) / SR);
     /* levels. Off the gas sits OFFGAS_AMP (x the offgas setting) under full load; rpm adds ~4 dB to redline */
-    off = clampf(OFFGAS_AMP * X[X_OFFGAS], 0, 1);
+    off = clampf(OFFGAS_AMP * powf(10, p->offgas_trim / 20) * X[X_OFFGAS], 0, 1);
     /* full load rises LVL_RPM dB from idle to redline; the calibration takes the pipes' own colour out first */
     {
-        float u = clampf((rpm - p->idle) / (p->redline - p->idle), 0, 1) * (NCAL - 1), cl, ch;
+        float u = clampf((rpm - p->idle) / (p->redline - p->idle), 0, 1) * (NCAL - 1), cl, ch, cm;
         int k = u >= NCAL - 1 ? NCAL - 2 : (int)u;
         u -= k;
         cl = v->corr[0][k] + u * (v->corr[0][k + 1] - v->corr[0][k]);
         /* on the overrun the motoring timbre has its own calibration */
         cl += v->over * (v->corr[2][k] + u * (v->corr[2][k + 1] - v->corr[2][k]) - cl);
         ch = v->corr[1][k] + u * (v->corr[1][k + 1] - v->corr[1][k]);
+        cm = v->corr[3][k] + u * (v->corr[3][k + 1] - v->corr[3][k]);
+        /* the foundation's gain and the total's renormalisation (the calibration's, at full load) */
+        {
+            float fc = v->fcal[k] + u * (v->fcal[k + 1] - v->fcal[k]), fn = v->fnorm[k] + u * (v->fnorm[k + 1] - v->fnorm[k]);
+            float kk = v->fcal_s > 0 ? tau_k(.01f, SR / (float)CTRL) : 1; /* (no pipe to build up: quick) */
+            v->fcal_s += (fc - v->fcal_s) * kk;
+            v->fnorm_s += (fn - v->fnorm_s) * kk;
+        }
         v->lvl_full = powf(10, LVL_RPM / 20 * (u + k) / (NCAL - 1)) * c->level;
         /* the correction follows the rpm in ~40 ms: after a fast rpm drop the pipes' low resonances need that long to
          * build up, and an instant correction would leave a hole */
@@ -301,10 +358,13 @@ static void voice_control(Voice *v, const Preset *p, const Ctl *c) {
             float k = v->corr_s > 0 ? tau_k(.04f, SR / (float)CTRL) : 1; /* (corr_s doubles as "started") */
             v->corr_l += (cl - v->corr_l) * k;
             v->corr_h += (ch - v->corr_h) * k;
+            v->corr_m += (cm - v->corr_m) * k;
             /* the load blend follows the timbre's lift/tip-in path, but not a shift's torque dip (that would swell
              * the level by pulling in the light-load correction) */
+            /* in dB, through the mid-load point: a 0.3-load timbre is much closer to full load than to no load */
             float xc = clampf(v->x_glide + .25f * v->bark, 0, 1);
-            v->corr_s = v->corr_l + xc * (v->corr_h - v->corr_l);
+            v->corr_s = xc < .4f ? v->corr_l * powf(v->corr_m / v->corr_l, xc / .4f)
+                                 : v->corr_m * powf(v->corr_h / v->corr_m, (xc - .4f) / .6f);
         }
         /* the loudness settles after the timbre: two one-poles, 45 ms down (90 % in ~175 ms, settled by 300 ms),
          * 12 ms up (back on load in ~50 ms) */
@@ -313,13 +373,25 @@ static void voice_control(Voice *v, const Preset *p, const Ctl *c) {
             v->xl_s += (xl - v->xl_s) * k;
             v->xl_s2 += (v->xl_s - v->xl_s2) * k;
         }
-        float map = off + (1 - off) * powf(v->xl_s2, 1.5f);
-        v->lvl = v->lvl_full * map * v->corr_s;
+        float map = off + (1 - off) * powf(v->xl_s2, 1.5f), fl = .35f + .65f * v->xl_s2;
+        /* the total (engine + foundation at this load) back to the level map */
+        float nrm = 1 / sqrtf(1 + v->fnorm_s * v->fnorm_s * fl * fl);
+        v->lvl = v->lvl_full * map * v->corr_s * nrm;
+        /* the foundation grows with load (structure-borne: the torque the mounts pass on), a third of it left on
+         * the overrun and at idle; it follows the loudness path, so lifts and tip-ins stay smooth */
+        v->fo_g = v->lvl_full * map * v->fcal_s * fl * nrm;
+        /* injector/valvetrain ticks: heard at idle and light load, drowned under load */
+        v->tick_g = TICK_K * (1 - .8f * v->xl_s2) * (1 - .6f * rpm_n) * map; /* (X offgas 0 silences them too) */
         /* pops keep their own absolute level whatever the off-gas level and its glide */
         v->pop_norm = POP_REF / fmaxf(map, .05f);
     }
     /* the turbulent noise riding on the pulses: more with load and revs, half on the overrun */
-    v->rasp_g = .4f * p->rasp * (.3f + .7f * x) * (.45f + .8f * rpm_n) * (1 - .6f * v->over);
+    /* at high revs under load the rasp grows (the pipe "rips" rather than whines) */
+    {
+        /* (the rasp takes half of a shift's torque dip: the pulses soften, the level stays) */
+        float xr = .5f * (x + clampf(v->x_glide + .25f * v->bark, 0, 1));
+        v->rasp_g = .4f * p->rasp * (.3f + .7f * xr) * (.4f + .5f * rpm_n + .45f * rpm_n * rpm_n * xr) * (1 - .6f * v->over);
+    }
     /* the band opens with load: dark at cruise and part load (no hiss), the full rasp under heavy load */
     v->rasp_fc = clampf(p->rasp_hz * (.3f + .7f * x * x) * (.7f + .5f * rpm_n), 200, 9000);
     /* broadband jet noise: lowpass at rasp_fc (a one-pole highpass at ~200 Hz in the sample loop: below that it would only feed the pipes' low modes) */
@@ -348,9 +420,6 @@ static void voice_control(Voice *v, const Preset *p, const Ctl *c) {
         bq_bandpass(&v->in_nbp, s, 1.1f);
         v->in_norm = bp_norm(s, 1.1f);
     }
-    /* sub layer */
-    v->sub_g = .11f * p->sub * (.25f + .75f * powf(x, .75f)) * (1 - .75f * rpm_n) * (1 - .5f * v->over);
-    bq_lowpass(&v->sub_lp, 140 + 200 * x, .7f);
 
     /* turbo: shaft spool lags the boost demand (0.35 s up, 0.4-0.8 s down); whistle and air rush at
      * ~-27 dB under the engine at full boost, nothing audible at cruise */
@@ -413,7 +482,7 @@ static void voice_control(Voice *v, const Preset *p, const Ctl *c) {
  * ------------------------------------------------------------------------------------------------------------- */
 float voice_step(Voice *v, const Preset *p, const Ctl *c) {
     const int nb = nbanks(p);
-    float acc[3] = {0, 0, 0}, src[3], ex, in, sub, tb = 0, bov = 0, pop = 0, out;
+    float acc[3] = {0, 0, 0}, accr[3] = {0, 0, 0}, src[3], ex, in, found, tick, tb = 0, bov = 0, pop = 0, out;
     double dph;
     int i, o;
 
@@ -424,7 +493,8 @@ float voice_step(Voice *v, const Preset *p, const Ctl *c) {
     {
         const float x = v->x, low = 1 - v->rpm_n;
         const float cov = p->cov * (.7f + 2.3f * (1 - x) * (1 - x)) * (1 + low) * (1 + 1.5f * p->over_irr * v->over);
-        const float spread = p->jitter * (.6f + 1.4f * (1 - x)) * (1 + .8f * low) / 720;
+        /* timing jitter: more at idle; and at high revs under load, where it smears the high orders into a rasp */
+        const float spread = p->jitter * (.6f + 1.4f * (1 - x)) * (1 + .8f * low) * (1 + 1.5f * v->rpm_n * x) / 720;
         float ddeg, h = v->h;
         int guard = 0;
         dph = c->rpm * v->idle_mod / (120. * SR) * (1 + v->v);
@@ -436,13 +506,16 @@ float voice_step(Voice *v, const Preset *p, const Ctl *c) {
             Event *e = &v->ev[v->evi];
             if (v->np < MAXP) {
                 Pulse *q = &v->pool[v->np++];
-                float g = gauss(&v->seed);
+                float g = gauss(&v->eseed);
                 q->kind = e->kind;
                 q->out = e->out;
-                q->rate = 1 / (p->pulse_w * e->w_trim * (1 + .35f * cov * gauss(&v->seed)));
-                q->A = e->amp_trim * fmaxf(.2f, 1 + g * cov * (e->kind ? .5f : 1));
+                q->rate = 1 / (p->pulse_w * e->w_trim * (1 + .35f * cov * gauss(&v->eseed)));
+                q->A = e->amp_trim * (1 + v->cd_amp[e->cyl]) * fmaxf(.2f, 1 + g * cov * (e->kind ? .5f : 1));
+                q->r = clampf(1 + .45f * gauss(&v->eseed), .3f, 2);
+                /* an intake event: the injector / valvetrain tick that goes with it */
+                if (e->kind && rnd(&v->eseed) > -.5f) v->tick_env += v->tick_g * (.75f + .45f * rnd(&v->eseed));
                 /* motoring on the overrun: now and then a weak, lazy pulse (a V8 burbles, a V12 hardly) */
-                if (!e->kind && v->over > .5f && .5f + .5f * rnd(&v->seed) < .07f * p->over_irr) q->A *= .45f;
+                if (!e->kind && v->over > .5f && .5f + .5f * rnd(&v->eseed) < .07f * p->over_irr) q->A *= .45f;
                 q->age = (float)((v->crank - v->next) * 720) * q->rate;
                 if (!e->kind) v->v += v->ripple * q->A;
             }
@@ -450,7 +523,8 @@ float voice_step(Voice *v, const Preset *p, const Ctl *c) {
                 v->evi = 0;
                 v->cycle += 1;
             }
-            v->next = v->cycle + v->ev[v->evi].angle + clampf(gauss(&v->seed) * spread, -.006f, .006f);
+            v->next = v->cycle + v->ev[v->evi].angle + v->cd_ang[v->ev[v->evi].cyl] +
+                      clampf(gauss(&v->eseed) * spread, -.006f, .006f);
         }
         /* sum the live pulses */
         ddeg = (float)(dph * 720);
@@ -461,7 +535,11 @@ float voice_step(Voice *v, const Preset *p, const Ctl *c) {
                 v->pool[i] = v->pool[--v->np];
                 continue;
             }
-            acc[q->out] += q->A * pulse_val(q->kind, idx, h);
+            {
+                float pv = q->A * pulse_val(q->kind, idx, h);
+                acc[q->out] += pv;
+                accr[q->out] += pv * q->r;
+            }
             q->age += ddeg * q->rate;
             i++;
         }
@@ -478,6 +556,7 @@ float voice_step(Voice *v, const Preset *p, const Ctl *c) {
                 v->lp[o] = clean(v->lp[o] + lpk * (grad - v->lp[o]));
                 src[o] = v->lp[o] * gain;
                 acc[o] *= sr; /* normalised pressure: RMS 1 */
+                accr[o] *= sr;
             }
         }
     }
@@ -512,7 +591,7 @@ float voice_step(Voice *v, const Preset *p, const Ctl *c) {
             /* turbulent flow noise riding on the pressure pulses of this path */
             float nz = bq(&v->nz_bp[b], rnd(&v->seed)), ride, t;
             v->nz_lo[b] += .026f * (nz - v->nz_lo[b]); /* ~200 Hz */
-            ride = (nz - v->nz_lo[b]) * v->nz_norm * acc[b] * v->rasp_g;
+            ride = (nz - v->nz_lo[b]) * v->nz_norm * accr[b] * v->rasp_g; /* each combustion as rough as it is */
             float in0 = (es_solo == 4 ? 0 : src[b]) + (es_solo == 5 ? 0 : ride) + (b == v->pop_bank ? pop : 0);
             y = pipe_step(w, in0, -clampf(w->refl * (.92f + .08f * v->x), 0, .92f));
             t = delay_read(&v->transit[b], v->transit_d[b]);
@@ -548,11 +627,24 @@ float voice_step(Voice *v, const Preset *p, const Ctl *c) {
         in *= p->intake_level * (c->turbo ? .6f : 1);
     }
 
-    /* ---- sub layer: crank-locked, softly saturated ---- */
+    /* ---- low foundation: engine orders 0.5/1/1.5/2 (crank-locked, drifting) + structure-borne rumble riding on
+     * the firing pressure, all in 32-115 Hz, so the low end stays at any revs ---- */
     {
-        double ph = v->crank * v->sub_order;
-        float s = sin_cyc((float)(ph - floor(ph)));
-        sub = bq(&v->sub_lp, s * (1.4f - .4f * s * s)) * v->sub_g;
+        static const float w[4] = {.45f, 1, .75f, .5f};
+        float ton = 0, rum, pr = nb > 1 ? .5f * (acc[0] + acc[1]) : acc[0];
+        int k;
+        for (k = 0; k < 4; k++) {
+            double ph = v->crank * (k + 1) + v->fo_ph[k];
+            ton += w[k] * v->fo_amp[k] * sin_cyc((float)(ph - floor(ph)));
+        }
+        rum = 10 * rnd(&v->seed) * (.55f + .45f * pr);
+        found = bq(&v->fo_lp2, bq(&v->fo_lp1, bq(&v->fo_hp, .55f * ton + rum)));
+    }
+    /* ---- ticks: short 4 kHz bursts ---- */
+    v->tick_env = clean(v->tick_env * .986f);
+    {
+        float tn = rnd(&v->seed); /* drawn every sample: the noise stream never depends on event timing */
+        tick = v->tick_env > 1e-6f ? bq(&v->tick_bp, tn) * v->tick_env : 0;
     }
 
     /* ---- turbo: blade-pass whistle (mostly narrow-band noise, a little tone) and compressor air ---- */
@@ -570,51 +662,100 @@ float voice_step(Voice *v, const Preset *p, const Ctl *c) {
         bov = bq(&v->bov_bp, rnd(&v->tseed)) * v->bov_norm * v->bov_env;
     }
 
-    if (calibrating) return ex + in + sub;
+    if (calibrating == 1) return bq(&v->trim, ex + in);
+    if (calibrating == 2) return found;
     switch (es_solo) {
     case 1: tb = bov = 0; break;
-    case 2: ex = in = sub = bov = 0; break;
-    case 3: ex = in = sub = tb = 0; break;
-    case 4: in = sub = tb = bov = 0; break; /* the rasp only, through the exhaust */
-    case 5: tb = bov = 0; break;            /* everything but the rasp (engine minus rasp) */
-    case 6: ex = sub = tb = bov = 0; break; /* the induction noise only */
+    case 2: ex = in = found = tick = bov = 0; break;
+    case 3: ex = in = found = tick = tb = 0; break;
+    case 4: in = found = tick = tb = bov = 0; break; /* the rasp only, through the exhaust */
+    case 5: tb = bov = 0; break;                     /* everything but the rasp (engine minus rasp) */
+    case 6: ex = found = tick = tb = bov = 0; break; /* the induction noise only */
+    case 8: ex = in = tick = tb = bov = 0; break;    /* the low foundation only */
     }
-    out = (ex + in + sub) * v->lvl + (tb + bov) * v->lvl_full;
+    out = bq(&v->trim, ex + in) * v->lvl + found * v->fo_g + (tb + bov + tick) * v->lvl_full;
     return out;
 }
 
-/* Loudness calibration: hold the voice at each of NCAL rpm points from idle to redline (125 ms to settle, 125 ms
- * measured) at no load, at full load and on the overrun, offline on a copy, and store the gain that brings it to CAL_LEVEL. The pipes and the muffler then
- * keep their colour (which harmonic rings where) but not their overall tilt against rpm, and the level map above
- * decides how loud the engine is. ~20 ms of CPU per voice at start-up. */
+/* Loudness calibration: at each of NCAL rpm points from idle to redline (40 ms to settle, then 140 ms measured while
+ * sweeping slowly across the point's cell) at no load, at full load and on the overrun, offline on a copy, listening through the master's fixed
+ * tone, and store the gain that brings it to CAL_LEVEL. The pipes and the muffler keep their colour (which harmonic
+ * rings where) but not their overall tilt against rpm: the level map decides how loud the engine is.
+ * Then the low foundation is sized per rpm: the full-load engine's own share below ~100 Hz is measured, and the
+ * foundation fills it up to a target share (a little less towards redline, where the level map adds loudness), so
+ * the absolute low end stays roughly constant from 1500 rpm to redline; the total is renormalised to CAL_LEVEL.
+ * ~40 ms of CPU per voice at start-up. */
+#define FB_TOP 1.5f  /* target share below ~100 Hz at idle, dB under the total ... */
+#define FB_SLOPE 8.5f /* ... falling by this much towards redline */
 static void voice_calibrate(Voice *v, const Preset *p) {
     static Voice t;
     static const float ones[NX] = {1, 1, 1, 1, 1};
-    const long settle = SR / 8, meas = SR / 8;
+    const long settle = SR / 24, meas = SR / 7;
+    float bass1[NCAL], ftot[NCAL], fbass[NCAL], s[NCAL];
     int L, k;
     long i;
     Ctl c;
-    for (L = 0; L < 3; L++) for (k = 0; k < NCAL; k++) v->corr[L][k] = 1;
-    calibrating = 1;
-    for (L = 0; L < 3; L++) { /* no load, full load, overrun (below idle + 250 rpm the overrun is no load) */
+    for (L = 0; L < 4; L++) for (k = 0; k < NCAL; k++) v->corr[L][k] = 1;
+    for (k = 0; k < NCAL; k++) {
+        v->fcal[k] = 0;
+        v->fnorm[k] = 0;
+    }
+    for (L = 0; L < 5; L++) { /* no load, full load, overrun (below idle + 250 rpm: no load), the foundation, mid load */
+        Tone tn;
+        Biquad bl[4]; /* the low band: 8th-order Butterworth at 100 Hz (a firing order just above 120 Hz must not count) */
+        static const float bq_q[4] = {.5098f, .6013f, .9000f, 2.5629f};
+        int j;
+        calibrating = L == 3 ? 2 : 1;
+        const int slot = L == 4 ? 3 : L;
         t = *v;
-        c.load = c.lvl_load = L == 1 ? .95f : L == 2 ? -.6f : 0;
-        c.throttle = L == 1 ? 1 : L == 2 ? 0 : .02f;
+        tone_init(&tn);
+        for (j = 0; j < 4; j++) {
+            bq_lowpass(&bl[j], 100, bq_q[j]);
+            bl[j].z1 = bl[j].z2 = 0;
+        }
+        c.load = c.lvl_load = L == 1 || L == 3 ? .95f : L == 2 ? -.6f : L == 4 ? .4f : 0;
+        c.throttle = L == 1 || L == 3 ? 1 : L == 2 ? 0 : L == 4 ? .4f : .02f;
         c.level = 1;
-        c.turbo = 0;
+        c.turbo = p->turbo; /* the turbine darkens the exhaust: calibrate as the preset runs by default */
         c.shift_guard = 1;
         c.x = ones;
         for (k = 0; k < NCAL; k++) {
-            double sum = 0;
+            double sum = 0, bsum = 0;
             float r;
             c.rpm = p->idle + (p->redline - p->idle) * k / (NCAL - 1);
+            /* the shaft spools in ~0.35 s: start each point at its steady boost */
+            t.spool = p->turbo ? powf(clampf((clampf(c.load, 0, 1) - .55f) / .45f, 0, 1), 1.3f) * clampf((c.rpm - 1400) / 2200, 0, 1) : 0;
             for (i = 0; i < settle + meas; i++) {
-                float y = voice_step(&t, p, &c);
-                if (i >= settle) sum += (double)y * y;
+                /* settle at the cell's lower edge, then sweep slowly across the cell (+-half a step), so a narrow
+                 * pipe resonance between two points is averaged in, not missed */
+                float cell = (p->redline - p->idle) / (NCAL - 1), w = i < settle ? 0 : (float)(i - settle) / meas;
+                float y, b;
+                c.rpm = fmaxf(p->idle, p->idle + cell * (k - .5f + w));
+                y = tone_run(&tn, voice_step(&t, p, &c), 0);
+                b = bq(&bl[3], bq(&bl[2], bq(&bl[1], bq(&bl[0], y))));
+                if (i >= settle) {
+                    sum += (double)y * y;
+                    bsum += (double)b * b;
+                }
             }
             r = (float)sqrt(sum / meas);
-            v->corr[L][k] = r > 1e-6f ? CAL_LEVEL / r : 1;
+            if (L != 3) {
+                v->corr[slot][k] = r > 1e-6f ? CAL_LEVEL / r : 1;
+                if (L == 1) bass1[k] = (float)sqrt(bsum / meas) / (r > 1e-6f ? r : 1);
+            } else {
+                ftot[k] = r;
+                fbass[k] = (float)sqrt(bsum / meas);
+            }
         }
     }
     calibrating = 0;
+    for (k = 0; k < NCAL; k++) {
+        float u = (float)k / (NCAL - 1), r = powf(10, -(FB_TOP + FB_SLOPE * u) / 20), q = ftot[k] / fmaxf(fbass[k], 1e-9f);
+        float num = fmaxf(r * r - bass1[k] * bass1[k], .35f * .35f * r * r), den = fmaxf(1 - r * r * q * q, .15f);
+        float f = sqrtf(num / den);
+        v->fcal[k] = CAL_LEVEL * f / fmaxf(fbass[k], 1e-9f);
+        v->fnorm[k] = q * f; /* the foundation's full-band level against the engine's, at full load */
+    }
+    for (k = 0; k < NCAL; k++) s[k] = (v->fcal[k > 0 ? k - 1 : 0] + 2 * v->fcal[k] + v->fcal[k < NCAL - 1 ? k + 1 : k]) / 4;
+    for (k = 0; k < NCAL; k++) v->fcal[k] = s[k];
 }

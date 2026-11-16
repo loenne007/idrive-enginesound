@@ -246,3 +246,9 @@ The design follows these sources:
 * Load is crank torque only. The off-gas / full-load balance (about 4 dB) assumes the app's load scale matches the
   test scale.
 * Telemetry slower than about 20 Hz leaves rpm steps up to 50 ms old. The prediction only helps on steady ramps.
+
+## Level against rpm
+
+On top of the order tables a per-preset trim (`GROW` in synth.c) lets the level keep rising to the top of the rev
+range: full load in the car's chain (live gain 6 dB, volume 0.9) goes from about -13 dBFS RMS at idle to -9 at
+4500 rpm for i6 and v8, just under the speaker protection's limits. The timbre (the order balance) is unchanged.

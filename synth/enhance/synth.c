@@ -33,6 +33,11 @@ static const float KNOT[NK] = {800, 1600, 2800, 4300};
 /* level against rpm, both load ends: the low band (under ~100 Hz up to ~2000 rpm) is held back for the speaker
  * protection's bass limit, the sound grows towards the top like a factory ASD */
 static const float RPM_TRIM[NK] = {0, 0, 1, 2.5f};
+/* per preset on top of it (i6, v8, v10, v12): the level keeps rising to the top of the rev range (it used to be flat
+ * from ~2000 rpm), with full load at 4500 rpm just under the speaker protection's limits in the car (live gain 6 dB):
+ * the low and middle revs give way a little, since the top cannot go higher */
+static const float GROW[NP][NK] = {
+    {-1.5f, -2.3f, -1.9f, -0.6f}, {-3.6f, -2.9f, -1.5f, 0.4f}, {-1.5f, -2.3f, -1.9f, -0.6f}, {-1.5f, -2.3f, -1.9f, -0.6f}};
 static const float CYL[8] = {.7f, -.4f, .2f, -.9f, .5f, -.2f, .6f, -.5f};
 static const int BANK8[8] = {1, -1, 1, -1, -1, 1, -1, 1};
 
@@ -52,8 +57,8 @@ static void tables(void) {
             if (k < 1 || k > NH) continue;
             tab_has[p][k] = 1;
             for (j = 0; j < NK; j++) {
-                tab_full[p][k][j] = w->full[j] + RPM_TRIM[j];
-                tab_off[p][k][j] = w->full[j] + RPM_TRIM[j] + w->off[j] + presets[p].off_trim;
+                tab_full[p][k][j] = w->full[j] + RPM_TRIM[j] + GROW[p][j];
+                tab_off[p][k][j] = w->full[j] + RPM_TRIM[j] + GROW[p][j] + w->off[j] + presets[p].off_trim;
             }
         }
     for (k = 1; k <= NH; k++) {

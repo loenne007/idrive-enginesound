@@ -12,6 +12,10 @@
 #include <string.h>
 
 #define OUT_GAIN 1.6f
+#ifndef LIM_CEIL
+#define LIM_CEIL .473f  /* -6.5 dBFS (after the protection's high-pass the peaks land around -5) */
+#endif
+#define WIDTH .35f      /* side signal: L/R correlation ~0.9 under load */
 #define K_RPM .0031f    /* 1 - exp(-1 / (6.5 ms * SR)) */
 #define K_LOAD .0026f   /* 8 ms */
 #define K_SLOW .000208f /* 100 ms: volume, gate, crossfade */
@@ -36,14 +40,45 @@ void synth_init(Synth *s, int p, float vol) {
     s->guard_t = 10;
     s->voice[p].weight = 1;
     for (i = 0; i < NX; i++) s->xt[i] = s->xs[i] = 1;
-    bq_highpass(&s->hp[0], 28, .5412f);
-    bq_highpass(&s->hp[1], 28, 1.3066f);
+    tone_init(&s->tone);
+    s->lk_g = 1;
+    bq_highpass(&s->pr_hp[0], 30, .5412f);
+    bq_highpass(&s->pr_hp[1], 30, 1.3066f);
+    s->pr_hp[2] = s->pr_hp[0];
+    s->pr_hp[3] = s->pr_hp[1];
     design_bass(s, 0);
-    bq_peak(&s->boom, 60, 1.1f, 3.0f);
-    bq_peak(&s->body, 125, 1.3f, 1.5f);
-    bq_peak(&s->mid, 600, .55f, 4.5f); /* presence: the firing harmonics' 2nd-5th orders, as a cabin hears them */
-    bq_lowpass(&s->cab_lp, 8000, .6f);
-    bq_highshelf(&s->shelf, 3000, -3);
+    /* stereo width: two different allpass pairs (L gets +side, R -side), mono sum untouched */
+    bq_allpass(&s->st_ap[0], 700, .6f);
+    bq_allpass(&s->st_ap[1], 2900, .7f);
+    bq_allpass(&s->st_ap[2], 1300, .5f);
+    bq_allpass(&s->st_ap[3], 4700, .8f);
+}
+
+/* The fixed tone of the master: infrasonic guard (28 Hz, 4th order), a light cabin colour (a little floor boom,
+ * body resonance, the presence of the firing harmonics' 2nd-5th orders, panel lowpass, treble shelf: in the car,
+ * not muffled) and a few broad body/exhaust formants FIXED IN HZ (the engine orders sweep through them as the revs
+ * change, as in a real car; Q <= 2.5, a few dB: colour, no ringing). The voices' loudness calibration listens
+ * through the same chain, so the level map is what comes out. */
+void tone_init(Tone *t) {
+    memset(t, 0, sizeof(*t));
+    bq_highpass(&t->f[0], 28, .5412f);
+    bq_highpass(&t->f[1], 28, 1.3066f);
+    bq_peak(&t->f[2], 58, 1.2f, 1.5f);
+    bq_peak(&t->f[3], 125, 1.3f, 1.5f);
+    bq_peak(&t->f[4], 600, .55f, 4.5f);
+    bq_peak(&t->f[5], 235, 2.0f, 2.0f);   /* body panel */
+    bq_peak(&t->f[6], 480, 2.2f, 1.8f);   /* exhaust/cabin formant */
+    bq_peak(&t->f[7], 1180, 2.5f, 2.0f);  /* intake/firewall formant */
+    bq_peak(&t->f[8], 2400, 1.5f, -2.0f); /* trim panel absorption */
+    bq_lowpass(&t->f[9], 8000, .6f);
+    bq_highshelf(&t->f[10], 3000, -3);
+}
+float tone_run(Tone *t, float x, Biquad *bass) {
+    int i;
+    x = bq(&t->f[1], bq(&t->f[0], x));
+    if (bass) x = bq(bass, x);
+    for (i = 2; i < NTONE; i++) x = bq(&t->f[i], x);
+    return x;
 }
 
 int synth_control(Synth *s, const char *line) {
@@ -123,11 +158,7 @@ static void control_tick(Synth *s) {
 }
 
 static float master(Synth *s, float x) {
-    x = bq(&s->hp[1], bq(&s->hp[0], x));
-    x = bq(&s->bass, x);
-    x = bq(&s->mid, bq(&s->body, bq(&s->boom, x)));
-    x = bq(&s->shelf, bq(&s->cab_lp, x));
-    return x;
+    return tone_run(&s->tone, x, &s->bass);
 }
 
 void synth_render(Synth *s, int16_t *out, unsigned frames) {
@@ -175,9 +206,36 @@ void synth_render(Synth *s, int16_t *out, unsigned frames) {
             if (v->weight > 1e-5f) x += v->weight * voice_step(v, &presets[i], &c) * presets[i].gain;
         }
         x = master(s, x);
-        x = limit(OUT_GAIN * x * s->volume * s->gate);
-        if (!isfinite(x)) x = 0;
-        out[2 * f] = out[2 * f + 1] = (int16_t)(x * 32767);
+        {
+            /* a little width for the cabin: the band above ~300 Hz through two different allpass pairs gives a
+             * side signal (L + side, R - side). The mono sum is exactly the engine; the bass stays mono. */
+            float hp, side, l, r, g = OUT_GAIN * s->volume * s->gate;
+            s->st_lp = clean(s->st_lp + .039f * (x - s->st_lp)); /* ~300 Hz */
+            hp = x - s->st_lp;
+            side = WIDTH * (bq(&s->st_ap[1], bq(&s->st_ap[0], hp)) - bq(&s->st_ap[3], bq(&s->st_ap[2], hp)));
+            l = g * (x + side);
+            r = g * (x - side);
+            if (!isfinite(l) || !isfinite(r)) l = r = 0;
+            /* look-ahead peak limiter (1.33 ms, ceiling -6.5 dBFS): the gain reaches its target before a peak
+             * leaves the delay line, then recovers in ~20 ms (a shift's drop leaves no hole) */
+            {
+                /* the peaks are detected as the speaker protection will see them: after a replica of its 30 Hz
+                 * 4th-order high-pass (which turns the low end's phase); the gain is applied to the signal itself */
+                float hl = bq(&s->pr_hp[1], bq(&s->pr_hp[0], l)), hr = bq(&s->pr_hp[3], bq(&s->pr_hp[2], r));
+                float pk = fmaxf(fabsf(hl), fabsf(hr)), tgt = pk > LIM_CEIL ? LIM_CEIL / pk : 1, dl, dr;
+                if (tgt < s->lk_g) s->lk_g += (tgt - s->lk_g) * .12f;
+                else s->lk_g += (tgt - s->lk_g) * .001f;
+                dl = s->lk_buf[s->lk_pos][0];
+                dr = s->lk_buf[s->lk_pos][1];
+                s->lk_buf[s->lk_pos][0] = l;
+                s->lk_buf[s->lk_pos][1] = r;
+                s->lk_pos = (s->lk_pos + 1) % LOOK;
+                l = limit(dl * s->lk_g);
+                r = limit(dr * s->lk_g);
+            }
+            out[2 * f] = (int16_t)(l * 32767);
+            out[2 * f + 1] = (int16_t)(r * 32767);
+        }
         s->time += 1. / SR;
         s->tick++;
     }

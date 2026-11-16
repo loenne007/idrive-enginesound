@@ -263,6 +263,22 @@ class Route {
     }
 
     /** The AudioManager's main sources, [{ id, name }]; throws when the list is unavailable. */
+    /** Everything the AudioManager lists, for the Audio page's report: { sources, sinks, connections, errors }. */
+    lists() {
+        return this._queue(async () => {
+            await this._init();
+            const out = { sources: [], sinks: [], connections: [], errors: [] };
+            const get = async (method, key, listKey, map) => {
+                try { out[key] = arrayIn(await this._call(method, {}, 3000), listKey).map(map); } catch (e) { out.errors.push(method + ': ' + (e && e.message || e)); }
+            };
+            await get('getListMainSources', 'sources', 'listMainSources', (x) => ({ id: x.sourceID, name: String(x.name || '') }));
+            await get('getListMainSinks', 'sinks', 'listMainSinks', (x) => ({ id: x.sinkID, name: String(x.name || '') }));
+            await get('getListMainConnections', 'connections', 'listConnections',
+                (x) => ({ id: x.mainConnectionID, source: x.sourceID, sink: x.sinkID, state: stateName(x.connectionState) }));
+            return out;
+        });
+    }
+
     sources() {
         return this._queue(async () => {
             await this._init();

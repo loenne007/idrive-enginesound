@@ -78,6 +78,40 @@ async function background(bg) {
         },
     };
 
+    /* The audio report (Audio page > Diagnose): what the AudioManager lists, the SmartX files, the service's last
+     * lines. Shown on the page, written to the log and to audio-report.txt in the app's data folder. */
+    const report = {
+        lines: null, loading: false,
+        make() {
+            if (report.loading) return;
+            report.loading = true;
+            daemon.send('SHM'); daemon.send('STATUS');
+            const done = (l) => {
+                const st = daemon.status || {}, shm = daemon.shm || {}, r = route.route || route.failed, L = [];
+                L.push('SERVICE ' + (daemon.connected ? (st.version || '?') + ' engine ' + st.engine + ' synth ' + st.synth : 'not connected'));
+                L.push('out ' + (st.device || '-') + (st.tone ? ' tone ' + st.tone : ''));
+                (st.log || []).slice(-10).forEach((x) => L.push('  ' + x));
+                L.push('ROUTE ' + route.state + (r ? ' ' + r.name + ' ' + r.source + '->' + r.sink : '') + (route.connState ? ' ' + route.connState : '') + (route.error ? ' ' + route.error : ''));
+                L.push('mix ' + (core.mixOn() ? 'on' : 'off') + ', mix route ' + core.activeRoute().name + ' ' + core.activeRoute().device);
+                if (l.errors && l.errors.length) l.errors.forEach((e) => L.push('AM error ' + e));
+                L.push('CONNECTIONS');
+                (l.connections || []).forEach((c) => L.push('  ' + c.id + ': ' + c.source + '->' + c.sink + ' ' + c.state));
+                L.push('SINKS');
+                (l.sinks || []).forEach((x) => L.push('  ' + x.id + ' ' + x.name));
+                L.push('SHM (service ids ' + (shm.ids || '?') + ')' + (shm.error ? ' error ' + shm.error : ''));
+                (shm.all || shm.files || []).forEach((x) => L.push('  ' + x));
+                L.push('SOURCES');
+                (l.sources || []).forEach((x) => L.push('  ' + x.id + ' ' + x.name));
+                report.lines = L; report.loading = false;
+                L.forEach((x) => log.info('report: ' + x));
+                try { fs.writeFileSync(path.join(bg.dataDir || '.', 'audio-report.txt'), L.join('\n') + '\n'); } catch (e) { log.warn('report: ' + e); }
+                daemon.emit('change');
+            };
+            // (a moment for the service's answers)
+            setTimeout(() => route.lists().then(done, (e) => done({ errors: [String(e && e.message || e)] })), 600);
+        },
+    };
+
     const fesSeen = [];
     const car = new Car(bg, ['rpm', 'speed', 'gear'], {
         [FES]: {
@@ -96,14 +130,15 @@ async function background(bg) {
     settings.onChange((key) => core.onSetting(key));
     core.start();
     log.info('engine sound: background running');
-    return { core, car, daemon, route, audio };
+    return { core, car, daemon, route, audio, report };
 }
 
 mgu.run({
     background,
     async start(ctx) {
         const { ui, settings, log } = ctx;
-        const { core, daemon, route, audio } = ctx.background || await background(ctx);
+        const { core, daemon, route, audio, report } = ctx.background || await background(ctx);
+        let diag = false, diagPage = 0;
         let dirty = true, page = 0;
         const redraw = () => { dirty = true; return render(); };
 
@@ -245,7 +280,9 @@ mgu.run({
             cv.text(audio.loading ? 'AudioManager: reading the sources...' : audio.sources ? 'AudioManager: ' + audio.sources.length + ' sources'
                 : 'AudioManager list unavailable' + (audio.error ? ': ' + audio.error : '') + ' - default used', 48, 432, 16, audio.sources || audio.loading ? t.dim : t.warn);
             cv.text(eps ? 'SmartX: ' + eps.length + ' endpoints' : 'SmartX list unavailable (service) - default device assumed', 48, 458, 16, eps ? t.dim : t.warn);
-            cv.text('Also in Settings: "Play over music (mix)"', 48, 490, 15, t.dim);
+            G.button(cv, t, 420, 468, 180, 36, diag ? 'Routes' : 'Diagnose', () => { diag = !diag; diagPage = 0; if (diag) report.make(); return redraw(); }, { key: 'diag' });
+
+            if (diag) return drawReport(cv, t);
 
             G.panel(cv, t, 640, 44, 936, 468, 'Mix routes');
             G.button(cv, t, 1416, 58, 144, 40, audio.loading ? 'Reading...' : 'Refresh', audio.loading ? null : () => { audio.refresh(); return redraw(); }, { key: 'refresh', busy: audio.loading });
@@ -261,6 +298,21 @@ mgu.run({
             });
             if (list.length > MIX_ROWS) cv.text('+' + (list.length - MIX_ROWS) + ' more', 1552, 494, 15, t.dim, { align: 'right' });
             else if (list.length === 1 && !audio.loading) cv.text(audio.sources ? 'No other prompt-like source with a SmartX endpoint' : 'Only the default (no source list)', 664, 494, 15, t.dim);
+        }
+
+        // the audio report: small text, two columns, a page at a time (photograph it, or read audio-report.txt)
+        function drawReport(cv, t) {
+            G.panel(cv, t, 640, 44, 936, 468, 'Audio report');
+            const L = report.lines, per = 22 * 2;
+            if (!L) { cv.text(report.loading ? 'Reading...' : 'No report', 664, 110, 18, t.dim); return; }
+            const pages = Math.max(1, Math.ceil(L.length / per));
+            diagPage = Math.min(diagPage, pages - 1);
+            G.button(cv, t, 1300, 58, 120, 40, 'Again', () => { report.make(); return redraw(); }, { key: 'diag-again', busy: report.loading });
+            G.button(cv, t, 1432, 58, 128, 40, (diagPage + 1) + ' / ' + pages, () => { diagPage = (diagPage + 1) % pages; return redraw(); }, { key: 'diag-page' });
+            L.slice(diagPage * per, diagPage * per + per).forEach((x, i) => {
+                const col = Math.floor(i / 22), row = i % 22;
+                cv.text(String(x).slice(0, 68), 660 + col * 460, 122 + row * 17.5, 13, /^[A-Z]{3,}/.test(x) ? t.text : t.dim, { literal: true });
+            });
         }
 
         async function render() {

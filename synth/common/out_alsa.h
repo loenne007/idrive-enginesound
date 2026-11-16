@@ -5,7 +5,13 @@
 typedef struct {
     void *lib, *pcm;
     double retry, log_at;
-    long target;                  /* frames to keep queued: the device's whole buffer (playback starts when full) */
+    long target;                  /* frames to keep queued now: the whole buffer until playback runs, then `keep` */
+    long buffer, keep;            /* the device's buffer; what is kept queued once it runs (a period less: lower latency) */
+    int started;                  /* the device was seen taking frames since the last (re)start: playback runs */
+    long expect;                  /* the queue as it would be with nothing taken: the last delay + what was written since */
+    long taken, refused;          /* since the last status line: frames the device accepted, blocks it refused (-EAGAIN) */
+    double stat_at;               /* when the next status line is due */
+    int stat_state;               /* what the last status line said: 0 nothing yet, 1 playing, 2 nobody reads */
     int (*open)(void **, const char *, int, int);
     int (*params)(void *, int, int, unsigned, unsigned, int, unsigned);
     long (*write)(void *, const void *, unsigned long);   /* snd_pcm_sframes_t */

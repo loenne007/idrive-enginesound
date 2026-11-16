@@ -2,8 +2,8 @@
 # make car: the head unit's binary tool/lfb-enginesound/es-synth-<id> (x86-64, glibc <= 2.27, loader in /lib).
 CC ?= cc
 ZIG ?= $(HOME)/.local/zig/zig-aarch64-macos-0.17.1/zig
-SRC = main.c synth.c presets.c out_alsa.c
-HDR = synth.h dsp.h out_alsa.h ../common/protect.h
+SRC = main.c synth.c presets.c ../common/out_alsa.c
+HDR = synth.h dsp.h ../common/out_alsa.h ../common/protect.h
 FLAGS = -std=c99 -O2 -Wall -Wextra -Wpedantic -I. -I../common
 ENGINE := $(notdir $(CURDIR))
 OUT := ../../tool/lfb-enginesound/es-synth-$(ENGINE)

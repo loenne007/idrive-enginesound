@@ -37,7 +37,8 @@
         "connect",
         "disconnect",
         "getListMainConnections",
-        "getListMainSources"
+        "getListMainSources",
+        "getListMainSinks"
       ]
     },
     "org.genivi.am.routinginterface.RoutingControlObserver": {
@@ -273,17 +274,22 @@
       "key": "rpmMap",
       "label": "Rev range",
       "type": "choice",
-      "default": "scaled",
+      "default": "locked",
       "options": [
         [
+          "locked",
+          "Locked to the car's engine (recommended)"
+        ],
+        [
           "scaled",
-          "Stretched to the engine's (recommended)"
+          "Stretched to the engine's range"
         ],
         [
           "real",
           "The car's real rpm"
         ]
-      ]
+      ],
+      "reset": 1
     },
     {
       "key": "realRedline",

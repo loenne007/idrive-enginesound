@@ -24,6 +24,8 @@ typedef struct {
     int banks, split;            /* exhaust paths 1 or 2; cylinders 1..split feed path 0, the rest path 1 */
     float bank_diff;             /* path 1's pulses weaker and wider by this fraction (manifold asymmetry) */
     float over_irr;              /* irregularity of the motoring pulses on the overrun */
+    float bass_trim;             /* dB, low shelf at 120 Hz inside the voice (an engine with a strong low end of its own) */
+    float offgas_trim;           /* dB on the off-gas level (0: the default -4.4 dB under full load) */
     float pulse_w;               /* pulse width scale (1 = nominal; < 1 = harder, shorter pulses) */
     float cov, jitter, trim;     /* cycle-to-cycle amplitude COV (at load), timing jitter (deg rms), static trims */
     float inertia, torque;       /* kg m^2, N m: crank-speed ripple per firing */
@@ -56,12 +58,14 @@ typedef struct {
     float angle;          /* cycles 0..1 */
     int out, kind;        /* output (bank, or banks = intake); 0 exhaust, 1 intake */
     float amp_trim, w_trim; /* fixed per-cylinder trims */
+    int cyl;              /* firing index: its slow drift */
 } Event;
 
 /* a live pressure pulse */
 typedef struct {
     float age;            /* crank degrees since the valve opened */
     float A, rate;        /* strength, width (age speed) */
+    float r;              /* how rough this combustion is (the noise riding on it) */
     int out, kind;
 } Pulse;
 
@@ -88,7 +92,7 @@ typedef struct {
     Pulse pool[MAXP];
     int np;
     float v;              /* crank-speed ripple */
-    uint32_t seed, pseed, tseed;
+    uint32_t seed, pseed, tseed, eseed, dseed; /* noise per sample, pops, turbo, per event, slow drifts */
     float gains[3][5];    /* gradient calibration per output over load */
     float srms[3][5];     /* pressure RMS per output over load (noise riding calibration) */
     float prev[3], lp[3];
@@ -118,14 +122,29 @@ typedef struct {
     /* control-rate values */
     float x, h, rasp_g, rasp_fc, nz_norm, nl_drive, nl_mk, lvl, lvl_full, f0, lpk, ripple, sub_g, sub_order;
     float in_hg, in_dg, in_ng, in_norm, rpm_n, over, tb_bnorm, tb_anorm, bov_norm, bov_tgt;
-    float corr[3][NCAL];  /* loudness calibration: no load, full load, overrun */
-    float corr_s, corr_l, corr_h; /* the applied correction; its no-load and full-load parts, smoothed */
+    float corr[4][NCAL];  /* loudness calibration: no load, full load, overrun, mid load (0.4) */
+    float corr_s, corr_l, corr_h, corr_m; /* the applied correction; its no-load and full-load parts, smoothed */
+    /* low foundation: low engine orders (0.5/1/1.5/2) with slow drift + structure-borne rumble, 32-115 Hz */
+    float fcal[NCAL], fnorm[NCAL]; /* its gain per rpm at full load; its level against the engine's there */
+    float fo_amp[4], fo_tamp[4], fo_ph[4], fo_tph[4], fo_vel[4], fo_t, fo_g, fnorm_s, fcal_s;
+    Biquad fo_hp, fo_lp1, fo_lp2, trim;
+    /* cylinder-to-cylinder differences that persist and drift slowly */
+    float cd_amp[MAXCYL], cd_tamp[MAXCYL], cd_ang[MAXCYL], cd_tang[MAXCYL], cd_t;
+    /* valvetrain / injector ticks */
+    float tick_env, tick_g;
+    Biquad tick_bp;
     float xl_s, xl_s2;    /* the level map's load: quick up, gliding down (linear, then rounded) */
     float x_g1, x_glide;  /* the timbre's load: two one-poles */
     float idle_t, idle_tgt, idle_w, idle_mod; /* idle-speed hunting */
     float weight;         /* crossfade weight */
     unsigned tick;
 } Voice;
+
+/* the master's fixed tone (infrasonic guard, cabin colour, body formants); the calibration hears through it too */
+#define NTONE 11
+typedef struct { Biquad f[NTONE]; } Tone;
+void tone_init(Tone *t);
+float tone_run(Tone *t, float x, Biquad *bass);
 
 typedef struct {
     Voice voice[NP];
@@ -136,7 +155,14 @@ typedef struct {
     float guard_t;        /* time since any shift */
     float xt[NX], xs[NX]; /* X targets, smoothed */
     float bass_db;        /* bass shelf currently designed for */
-    Biquad hp[2], bass, boom, body, mid, cab_lp, shelf;
+    Tone tone;
+    Biquad bass;
+    Biquad st_ap[4];      /* stereo: two allpass pairs on the band above ~300 Hz */
+    float st_lp;
+#define LOOK 64
+    float lk_buf[LOOK][2], lk_g; /* look-ahead peak limiter */
+    Biquad pr_hp[4];      /* its detector: the speaker protection's high-pass, L and R */
+    int lk_pos;
     double time, last_p;
     unsigned tick;
 } Synth;

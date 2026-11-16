@@ -10,7 +10,9 @@
  *      the engine or the bass setting asks for
  *   4. a power limiter: the 3 s RMS is held under -8 dBFS, the level of loud mastered music (long full-power
  *      stretches are turned down slowly)
- *   5. a look-ahead peak limiter (1 ms) at -1.5 dBFS, then a soft clip under -1 dBFS as the last resort
+ *   5. peaks: a soft clip that rounds a pulse's crest off under -1 dBFS (an engine's firing pulses have 12 dB of
+ *      crest: shaving the top 1-2 dB of them is inaudible, turning the whole sound down for them is not), and before
+ *      it a look-ahead limiter (1 ms) that only acts on what is more than 2 dB over
  *   6. a 60 ms fade-in at start, so the first block never clicks
  * Header only, C99, no allocation, a few dozen flops per frame. Engines include it from synth/common/ and call
  * protect_init() once and protect_run() on every block they output (interleaved S16 stereo, 48 kHz).
@@ -80,7 +82,7 @@ static void protect_live(Protect *p) {
 static void protect_run(Protect *p, int16_t *buf, unsigned n) {
     const float BASS_MAX = 0.708f;    /* -3 dBFS */
     const float POW_MAX = 0.1585f;    /* (-8 dBFS)^2 */
-    const float PEAK_MAX = 0.841f;    /* -1.5 dBFS */
+    const float PEAK_MAX = 1.06f;     /* +0.5 dBFS into the soft clip: crests up to here are rounded off, more is turned down */
     const float pow_a = 1.f / (float)(3 * PROTECT_SR), env_rel = 1.f / (float)(0.25 * PROTECT_SR);
     unsigned i;
     int c;
@@ -116,10 +118,10 @@ static void protect_run(Protect *p, int16_t *buf, unsigned n) {
                 float d = p->delay[p->dpos][c], y;
                 p->delay[p->dpos][c] = x[c];
                 y = d * p->pk_gain;
-                /* fade-in, then the soft clip under -1 dBFS (only a peak the limiter missed reaches it) */
+                /* fade-in, then the soft clip: untouched below -1.9 dBFS, never above -1 dBFS */
                 if (p->fade < (long)(0.06 * PROTECT_SR)) y *= (float)p->fade / (float)(0.06 * PROTECT_SR);
-                if (y > 0.85f) y = 0.85f + 0.04f * tanhf((y - 0.85f) / 0.04f);
-                else if (y < -0.85f) y = -0.85f + 0.04f * tanhf((y + 0.85f) / 0.04f);
+                if (y > 0.8f) y = 0.8f + 0.09f * tanhf((y - 0.8f) / 0.09f);
+                else if (y < -0.8f) y = -0.8f + 0.09f * tanhf((y + 0.8f) / 0.09f);
                 if (!(y == y)) y = 0;   /* NaN never reaches the speakers */
                 out[c] = y;
             }

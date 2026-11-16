@@ -2,8 +2,10 @@
 /**
  * core.js - turns the car's data into the synthesizer's controls and decides when the sound plays.
  *
- *   rpm     the car's engine speed, mapped onto the chosen engine's rev range (setting rpmMap "scaled": the car's
- *           idle -> the engine's idle, the car's max rpm -> the engine's redline), or as it is ("real")
+ *   rpm     the car's engine speed, estimated between its 10-20 samples a second (track.js), then mapped onto the
+ *           chosen engine (setting rpmMap): "locked" = a fixed ratio per preset that puts the engine's firing order
+ *           on a harmonic of the car's own engine, so the two blend at every rpm; "scaled" = the car's idle -> the
+ *           engine's idle, the car's max rpm -> its redline; "real" = as it is
  *   load    the engine torque against the car's max torque: 0..1 pulling, negative on the overrun (engine braking)
  *   gear    from the gearbox; a change sends S <from> <to> (shift character in the synth)
  *
@@ -12,11 +14,14 @@
  * The route (route.js): exclusive (CarLifeMedia, the music pauses) or, with the setting mix ("Play over music"), the
  * mix route chosen on the Audio page (default OAPGenericOverlay), which plays over the music.
  */
+/* lock: the "locked" rev ratio (engine rpm = car rpm x lock). The car's four-cylinder fires at engine order 2; the
+ * ratio puts the preset's firing order on an even order of it: i6 3 x 4/3 = 4, V8 4 x 1.5 = 6, V10 5 x 1.6 = 8,
+ * V12 6 x 4/3 = 8. The diesel's 4800 rpm becomes 6400 / 7200 / 7680 / 6400 rpm. */
 const PRESETS = {
-    i6: { title: 'Inline-6', sub: '3.0 turbo, B58 / S58 style', idle: 700, red: 7000, turbo: true },
-    v8: { title: 'V8', sub: 'cross-plane, M5 style', idle: 650, red: 7200, turbo: true },
-    v10: { title: 'V10', sub: 'high-revving, naturally aspirated', idle: 900, red: 8250, turbo: false },
-    v12: { title: 'V12', sub: 'smooth, naturally aspirated', idle: 700, red: 7500, turbo: false },
+    i6: { title: 'Inline-6', sub: '3.0 turbo, B58 / S58 style', idle: 700, red: 7000, turbo: true, lock: 4 / 3 },
+    v8: { title: 'V8', sub: 'cross-plane, M5 style', idle: 650, red: 7200, turbo: true, lock: 1.5 },
+    v10: { title: 'V10', sub: 'high-revving, naturally aspirated', idle: 900, red: 8250, turbo: false, lock: 1.6 },
+    v12: { title: 'V12', sub: 'smooth, naturally aspirated', idle: 700, red: 7500, turbo: false, lock: 4 / 3 },
 };
 const ORDER = ['i6', 'v8', 'v10', 'v12'];
 /* The sound engines (synth/<id>/ in the repository, es-synth-<id> in the service): each one plays all four presets;
@@ -60,8 +65,10 @@ const SOUND_SETTINGS = [
 const ENGINE_RUNS = 400;      // rpm: below = engine off
 const TEST_MS = 11000;        // the test sound (10 s of beeps) owns the route this long
 const RELEASE_MS = 4000;      // muted this long: the audio route goes back to the car
-const SEND_MS = 20;           // P lines at 50 Hz
+const SEND_MS = 10;           // P lines at 100 Hz, each with the rpm estimated for that moment (track.js)
+const RATE_LOG_MS = 600000;   // how often the car's rpm samples come: logged after a minute, then every 10 minutes
 const STALE_MS = 1500;        // no rpm for this long: no P lines (the synth fades)
+const { Track } = require('./track');
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const num = (x) => typeof x === 'number' && isFinite(x);
 
@@ -72,6 +79,8 @@ class Core {
         this.mixChoice = opts.mixChoice || null;     // the mix route chosen on the Audio page (null: the default)
         this.now = opts.now || Date.now;
         this.d = { rpm: null, rpmT: 0, speed: null, gear: undefined, torque: null, mode: null, demo: false };
+        this.track = new Track();     // the rpm between the car's samples
+        this.rateLogged = 0; this.t0 = this.now();
         this.idle = 800;          // the car's idle, learned at a standstill
         this.out = { rpm: 0, load: 0, throttle: 0, gear: 0 };
         this.playing = false; this.reason = 'starting'; this.mutedAt = this.now(); this.routed = false; this.lastGear = undefined;
@@ -84,10 +93,9 @@ class Core {
     /* ---------- inputs ---------- */
     feed(d) {
         const t = this.now();
-        // a new rpm or torque goes to the synth at once (not only on the 50 Hz tick): a gear change sounds as quick
-        // as the car sends it
+        // a new rpm or torque goes to the synth at once (not only on the next tick)
         const fresh = num(d.rpm) || (d.torque !== undefined && num(d.torque));
-        if (num(d.rpm)) { this.d.rpm = d.rpm; this.d.rpmT = t; }
+        if (num(d.rpm)) { this.d.rpm = d.rpm; this.d.rpmT = t; this.track.feed(d.rpm, t); }
         if (num(d.speed)) this.d.speed = d.speed;
         if (d.torque !== undefined) this.d.torque = num(d.torque) ? d.torque : null;
         if (d.mode !== undefined) this.d.mode = d.mode;
@@ -97,7 +105,7 @@ class Core {
             if (this.lastGear !== undefined && g !== this.lastGear && g > 0 && this.lastGear > 0) this.daemon.send('S ' + this.lastGear + ' ' + g);
             this.lastGear = g; this.d.gear = g;
         }
-        if (fresh && this.playing && t - this.lastP >= 8) this._sendP();
+        if (fresh && this.playing && t - this.lastP >= 4) this._sendP();
         // the car's idle: rpm at a standstill, engine warm and settled (diesel 750-900)
         if (num(this.d.rpm) && this.d.speed !== null && this.d.speed < 1 && this.d.rpm > 550 && this.d.rpm < 1100 && (!num(this.d.torque) || this.d.torque < 60)) {
             this.idle += (this.d.rpm - this.idle) * 0.01;
@@ -107,7 +115,9 @@ class Core {
     /* ---------- mapping ---------- */
     virtualRpm(real) {
         const p = PRESETS[this.preset()];
-        if (this.settings.get('rpmMap') === 'real' || soundEngineOf(this.soundEngine()).realRpm) return real;
+        const map = this.settings.get('rpmMap');
+        if (map === 'real' || soundEngineOf(this.soundEngine()).realRpm) return real;
+        if (map !== 'scaled') return Math.min(real * p.lock, p.red * 1.03);          // locked
         const top = Math.max(this.idle + 1000, Number(this.settings.get('realRedline')) || 4800);
         if (real <= this.idle) return real / this.idle * p.idle;
         const x = (real - this.idle) / (top - this.idle);
@@ -188,15 +198,28 @@ class Core {
         if (!why) {
             if (!this.playing) { this.playing = true; this.daemon.send('M 0'); }
             if (!this.routed) this._route(true);
-            if (t - this.lastP >= 15) this._sendP();
+            if (t - this.lastP >= SEND_MS - 3) this._sendP();
+            this._logRate(t);
         } else {
             if (this.playing) { this.playing = false; this.mutedAt = t; this.daemon.send('M 1'); }
             if (this.routed && t - this.mutedAt > RELEASE_MS) this._route(false);
         }
     }
 
+    /** The car's rpm sample rate into the log (it decides how smooth and how quick the sound can follow). */
+    _logRate(t) {
+        if (t - (this.rateLogged || this.t0) < (this.rateLogged ? RATE_LOG_MS : 60000)) return;
+        const st = this.track.stats();
+        if (st.samples < 50) return;
+        this.rateLogged = t;
+        this.log.info('rpm samples every ' + Math.round(st.interval) + ' ms (' + st.perSecond.toFixed(1) + ' a second)');
+    }
+
+    /** The car's engine speed now: the estimate between samples (track.js), the last reading without one. */
+    rpmNow() { const e = this.track.at(this.now()); return num(e) ? e : this.d.rpm; }
+
     _sendP() {
-        const rpm = this.virtualRpm(this.d.rpm), load = this.load(this.d.torque);
+        const rpm = this.virtualRpm(this.rpmNow()), load = this.load(this.d.torque);
         // throttle: what the driver asks; the torque follows it closely in a turbo diesel
         const thr = clamp(load * 1.15, 0, 1);
         this.out = { rpm, load, throttle: thr, gear: this.d.gear === undefined ? 0 : this.d.gear };

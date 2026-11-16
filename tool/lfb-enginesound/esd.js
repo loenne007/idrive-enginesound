@@ -158,13 +158,18 @@ function shmEndpoints() {
         const m = /^(?:smartx[_.-]?)?([A-Za-z0-9]+(?:_[A-Za-z0-9]+)*?_CF_\d+_[A-Z_]+?)(?:_connection|_ringbuffer|_rb|_ctrl|_shm)?$/.exec(n);
         if (m) seen[m[1]] = true;
     });
-    return { endpoints: Object.keys(seen).sort(), files: names.filter((n) => /_CF_|smartx/i.test(n)).slice(0, 120) };
+    // every file with its mode and group, for the app's audio report (which ones may we open?)
+    const all = names.slice(0, 200).map((n) => {
+        try { const st = fs.statSync(path.join(SHM, n)); return n + ' ' + (st.mode & 0o777).toString(8) + ' ' + st.uid + ':' + st.gid; } catch (e) { return n; }
+    });
+    return { endpoints: Object.keys(seen).sort(), files: names.filter((n) => /_CF_|smartx/i.test(n)).slice(0, 120), all,
+        ids: (process.getuid ? process.getuid() : '') + ':' + (process.getgroups ? process.getgroups().join(',') : '') };
 }
 
 function status() {
     return {
         type: 'status', version: VERSION, device: state.device, synth: state.child ? 'running' : state.device ? 'starting' : 'stopped',
-        tone: state.tone ? state.tone.dev : null, sticky: state.sticky, log: state.recent.slice(-12),
+        tone: state.tone ? state.tone.dev : null, sticky: state.sticky, log: state.recent.slice(-16),
         engine: path.basename(synthPath()).replace(/^es-synth-/, ''), engines: engines(), synthFile: fs.existsSync(synthPath()),
     };
 }

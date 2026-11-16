@@ -64,6 +64,10 @@ static inline void bq_peak(Biquad *f, float hz, float q, float db) {
     float w = bq_w(hz), c = cosf(w), al = sinf(w) / (2 * q), A = powf(10, db / 40);
     bq_set(f, 1 + al * A, -2 * c, 1 - al * A, 1 + al / A, -2 * c, 1 - al / A);
 }
+static inline void bq_allpass(Biquad *f, float hz, float q) {
+    float w = bq_w(hz), c = cosf(w), al = sinf(w) / (2 * q);
+    bq_set(f, 1 - al, -2 * c, 1 + al, 1 + al, -2 * c, 1 - al);
+}
 static inline void bq_lowshelf(Biquad *f, float hz, float db) { /* slope 1 */
     float w = bq_w(hz), c = cosf(w), A = powf(10, db / 40), al = sinf(w) / 2 * sqrtf(2), sa = 2 * sqrtf(A) * al;
     bq_set(f, A * ((A + 1) - (A - 1) * c + sa), 2 * A * ((A - 1) - (A + 1) * c), A * ((A + 1) - (A - 1) * c - sa),
@@ -103,11 +107,12 @@ static inline float sin_cyc(float ph) { /* ph in cycles, 0..1 */
     return sin_tab[i] + (x - i) * (sin_tab[i + 1] - sin_tab[i]);
 }
 
-/* Soft limiter: linear to 0.5, rational knee asymptotic to 0.708 (-3 dBFS): the shared speaker protection after us
- * (peaks -1.5 dBFS) then never has to act on the sound. */
+/* Last-resort soft clip after the look-ahead peak limiter (synth.c): linear to 0.45, rational knee asymptotic to
+ * 0.56 (-5 dBFS). The limiter keeps the waveform's shape (gain, not clipping): a clipped waveform regrows its
+ * peaks by 2-4 dB in the speaker protection's 30 Hz high-pass after us. */
 static inline float limit(float x) {
     float a = fabsf(x);
-    if (a > .5f) x = copysignf(.5f + .208f * (a - .5f) / (.208f + a - .5f), x);
+    if (a > .45f) x = copysignf(.45f + .11f * (a - .45f) / (.11f + a - .45f), x);
     return x;
 }
 #endif

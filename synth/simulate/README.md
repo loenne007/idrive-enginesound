@@ -75,21 +75,46 @@ turbo engines a turbine high shelf that darkens with spool.
 steps, 180 ms smoothing), on top of the low-load cycle variation (cycle energy COV 7-12 %).
 
 **Intake.** A Helmholtz airbox bandpass and a direct path driven by the intake pulses, plus induction noise (a
-band that opens with throttle flow) riding on the intake pressure. **Sub layer**: a crank-locked softly
-saturated sine at half the firing order (octave-folded into 38-85 Hz), fading with rpm.
+band that opens with throttle flow) riding on the intake pressure.
 
-**Loudness calibration.** Each voice is held at 24 rpm points from idle to redline at no load and at full load
-(offline, on a copy, at start-up: ~160 ms CPU for the four voices on an M-series core; a third pass calibrates the
-overrun's motoring timbre, blended in with the overrun state) and the gain that brings it
-to a fixed level is stored. The pipes keep their colour (which harmonic rings where) but no longer decide how
-loud the engine is; the explicit level map does (off-gas -4.4 dB, +6 dB to redline). The correction follows
-in 40 ms, as long as the pipes' low modes need to build up after a fast rpm drop (an instant correction left a
-10 dB, 60 ms hole after a 6000 -> 2800 rpm step).
+**Low foundation** (replaces the old sub layer, which faded with rpm: the low end collapsed as soon as the firing
+order climbed past ~120 Hz, e.g. the i6 at 2500 rpm had -36 dBFS below 120 Hz against -20 at 1500). Engine orders
+0.5/1/1.5/2, crank-locked but each with a slowly drifting amplitude (0.75-1.25) and a sliding phase (0.1-0.6
+cycles/s), plus structure-borne rumble (noise riding on the firing pressure), all band-limited to 32-115 Hz
+(4th-order): what a cabin hears through the mounts and the body. It grows with load (a third of it on the
+overrun and at idle) and follows the loudness path, so lifts and tip-ins stay smooth. Its gain per rpm comes from
+the calibration below, so the absolute level below 120 Hz at full load stays within ~2.5 dB of its 1500 rpm value
+up to redline (no hole, no single droning resonance, nothing below 30 Hz). The sliding phases keep it from sitting
+in a fixed, rpm-dependent constructive or destructive sum with the exhaust's own low orders.
 
-**Master.** 28 Hz 4th-order high-pass, the bass shelf, a light cabin colour (60 Hz boom +3 dB, 125 Hz body
-+1.5 dB, a broad 600 Hz presence lift +4.5 dB for the 2nd-5th firing harmonics, 8 kHz panel lowpass, -3 dB
-treble shelf: inside the car, not muffled), output gain, a rational soft limiter (linear to -6 dBFS,
-asymptote -3 dBFS) so the shared speaker protection after us normally never acts. Voices crossfade in ~300 ms
+**Organic detail.** Cylinder-to-cylinder differences persist and drift (each cylinder's strength +-2 % and timing
++-0.35 deg wander to new targets every 1-2.5 s), on top of the white cycle-to-cycle jitter. Each combustion gets
+its own roughness (the noise riding on it is 0.3-2x as strong). At high revs under load the rasp grows and the
+timing jitter smears the high orders (a rip, not a whine). Quiet injector/valvetrain ticks (4.3 kHz bursts on the
+intake events, irregular) are heard at idle and light load only. The master has a few broad body/exhaust formants
+fixed in Hz that the orders sweep through. Separate random streams for per-sample noise, per-event variation,
+slow drifts, pops and turbo: a setting or a shift never reshuffles the rest.
+
+**Loudness calibration.** At start-up each voice is measured offline on a copy at 24 rpm points from idle to
+redline, at no load, mid load (0.4), full load and on the overrun, listening through the master's fixed tone (so
+what comes out is what the level map says) with the preset's default turbo at its steady boost; each point sweeps
+slowly across its cell, so a narrow pipe resonance between two points is averaged in. The gains are blended in dB
+through the mid-load point (a 0.3-load timbre is much closer to full load than to no load: a linear blend made
+part load at 6500 rpm as loud as full load). Then the low foundation is sized per rpm: the full-load engine's own
+share below ~100 Hz is measured and the foundation fills it up to a target share (falling 8.5 dB towards
+redline, where the level map adds loudness); the total is renormalised per load. The explicit level map then
+decides the loudness: +8.5 dB from idle to redline at any load, off-gas -4.4 dB under full load. The
+correction follows the rpm in 40 ms (the pipes' low modes need that long to build up after a fast rpm drop).
+~290 ms of CPU for the four voices on an M-series core.
+
+**Master.** 28 Hz 4th-order high-pass, the bass shelf, a light cabin colour (58 Hz +1.5 dB, 125 Hz body
++1.5 dB, a broad 600 Hz presence lift +4.5 dB for the 2nd-5th firing harmonics, formants at 235 Hz +2, 480 Hz
++1.8, 1180 Hz +2, 2.4 kHz -2 dB (Q <= 2.5), 8 kHz panel lowpass, -3 dB treble shelf: inside the car, not muffled).
+A little width: the band above ~300 Hz through two different allpass pairs makes a side signal (L + side,
+R - side), so the mono sum is exactly the engine and the bass stays mono (L/R correlation 0.90-0.98 under load,
+~1 at idle). Output gain, then a look-ahead peak limiter (1.3 ms, ceiling -6.5 dBFS, 20 ms release) that
+detects the peaks as the speaker protection will see them, after a replica of its 30 Hz high-pass (a clipped
+waveform regrows its peaks by 2-4 dB in that high-pass), and a last-resort soft clip at -5 dBFS. Voices crossfade in ~300 ms
 on `E`; idle voices are not computed. Denormals are flushed in every recursive state; x86 FTZ/DAZ is set.
 
 | Preset | Firing order / angles (deg) | Exhaust paths | Idle/redline | Character |
@@ -133,43 +158,69 @@ than Engine_Sim's.
 Simulate 0.4/0.5/1.9/1.3 %; 5000-7000 rpm: ref 4.5/9.5/10.9/7.5 %, Simulate 2.9/2.1/8.9/7.1 % (the V8 is duller at high
 rpm than Engine_Sim's turbo V8, whose turbo layer is loud).
 
-**Demo renders** (`samples/`): RMS -19.1..-20.1 dBFS (Waveguide: -19.4/-19.8), peaks -4.4..-5.5 dBFS, below-100 Hz
-peaks -9.4..-15 dBFS, highest 3 s RMS -15.9..-16.8 dBFS: under the shared protection's bass (-8 dBFS),
-power (-14 dBFS) and peak (-1.5 dBFS) limits at the default settings (with `X pops 2` the V8's loudest bangs
-reach -6.6 dBFS below 100 Hz: the protection's bass limiter then acts on them). Idle ~-25, full-load pull ~-17,
-coast ~-27 dBFS.
+**Level against rpm** (raw WAV, `--volume 0.9`, steady states; full load / load 0.3 / off-gas, dBFS):
 
-**Bench** (`--bench 60`, one Apple M-series core, turbo layer on for every preset): i6 402x, v8 347x,
-v10 355x, **v12 322x** realtime (Waveguide on the same host: 160-193x). Start-up calibration: ~160 ms CPU.
+| i6 rpm | 700 | 1500 | 2500 | 3500 | 4500 | 5500 | 6500 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| full, before | -20.3 | -19.2 | -19.0 | -17.5 | -16.3 | -15.8 | -14.9 |
+| full, now | -23.1 | -21.6 | -20.8 | -19.6 | -18.5 | -16.2 | -15.4 |
+| load 0.3, before / now | -23.7 / -26.1 | -22.1 / -25.2 | -21.5 / -23.9 | -21.4 / -22.9 | -19.8 / -22.2 | -17.4 / -20.1 | -15.9 / -18.4 |
+| off-gas, before / now | -24.9 / -26.8 | -23.2 / -25.9 | -22.8 / -25.2 | -21.7 / -23.6 | -21.1 / -22.9 | -20.1 / -21.2 | -19.2 / -19.8 |
+| below 120 Hz at full load, before | -20.7 | -20.0 | **-36.3** | -27.2 | -25.9 | -22.8 | -21.0 |
+| below 120 Hz at full load, now | -23.8 | -22.7 | -25.0 | -24.5 | -23.7 | -23.7 | -22.8 |
+
+V12 below 120 Hz at full load: before -23.1 (700) / **-36.1** (1500) / -32.0 / -25.1 / -22.8 / -21.9 / -22.8 /
+-23.9 (7200); now -24.3 / -24.3 / -24.2 / -24.6 / -22.6 / -23.8 / -22.9 / -21.8. L/R correlation: before 1.000
+everywhere; now 0.89-0.98 under load, ~1 at idle (bass mono). Every preset's full,
+part-load and off-gas levels rise with rpm (1000 rpm steps never fall by more than 0.75 dB, +5 to +7 dB from 1500
+rpm to redline), the low end stays within 4 dB of its 1500 rpm value (measured 1.9-3.7 dB), off-gas sits 3.9-4.7
+dB under full load at 3000 rpm. Full load near redline: -15.1..-16.4 dBFS RMS, peaks -4.1..-5.2 dBFS, bass
+(<150 Hz) peaks -8.2..-9.9 dBFS. With the car's +6 dB live gain the protection's power and bass limiters stay
+idle; its peak limiter takes ~1 dB off the crests at redline (raw peaks would need to be <= -7.5 dBFS for it to
+stay idle: more than this engine's crest factor allows without audible limiting).
+
+**Demo renders** (`samples/`): RMS -21.0..-21.8 dBFS, peaks -4.9..-6.0 dBFS.
+
+**Bench** (`--bench 60`, one Apple M-series core, turbo layer on for every preset): i6 275x, v8 242x,
+v10 249x, **v12 231x** realtime (Waveguide on the same host: 160-193x). Start-up calibration: ~290 ms CPU.
 
 `test.sh` checks: rpm-step response (26 ms to 90 %), finite internal states and the -3 dBFS bound across
 extreme sweeps/preset switches/shifts/X settings; demo safety (finite, peak <= -3 dBFS, RMS window, no clicks
 by a relative sample-slope test), every demo upshift within 3.5 dB of the settled levels (the Waveguide engine's demo limit; the V8's own roughness is ~3 dB there); firing pitch at
-1800/3600 rpm, V8/V10 half-order character, i6 smoothness, brightening with load; >3 kHz at cruise >= 30 dB
+1800/3600 rpm, V8/V10 half-order character, i6 smoothness (orders above 150 Hz), brightening with load; the low
+end (<120 Hz) at full load within 4 dB of its 1500 rpm value up to redline; full, part-load and off-gas levels
+rising with rpm (steps >= -0.75 dB, >= +4 dB to redline); >3 kHz at cruise >= 30 dB
 under the total; the lift-off (16 averaged lifts: never more than 1 dB under the settled level, no rise over 1 dB on the way
 down, 90 % within 300 ms, the >1 kHz share >= 60 % of its fall at 150 ms, no clicks), tip-in within 100 ms; off-gas level (coast and
 light load 3-5 dB under full load at 3000 rpm); an rpm step's new firing frequency 60 ms later; S events
 against the same drive without S (<= 3 dB) for full-load, light-load and overrun shifts, and an upshift as an
-rpm step; preset switches, X changes, S, mute and malformed lines without clicks; mute, stale-input watchdog,
+instantaneous rpm step (<= 3.5 dB: the pipes' low end needs ~100 ms to rebuild after a 3200 rpm jump; the car's
+telemetry ramps); preset switches, X changes, S, mute and malformed lines without clicks; mute, stale-input watchdog,
 quit fade; each X setting (offgas, bass, turbo level at boost/0.6 load/cruise/T 0, X turbo 0 vs 1 at cruise
 within 0.5 dB and at boost above 3 kHz, blow-off level/length and no
 blow-off from a shift, pops 0/1/2 event counts and no pops from a shift). These are objective regressions and
 do **not** establish subjective quality, Apollo Lake CPU use or SmartX latency: that needs listening in the car.
 
 Measurement hook: `ES_SOLO=1` renders the engine only, `2` the turbo only, `3` the blow-off only, `4` the pulse
-rasp only (through the exhaust), `5` the engine without the rasp, `6` the induction noise only.
+rasp only (through the exhaust), `5` the engine without the rasp, `6` the induction noise only, `8` the low
+foundation only.
 
 ## Known weaknesses
 
 - Not auditioned: every number above is measured, none is listened to.
-- V10/V12 are lighter below 100 Hz than Engine_Sim's renders; V12 is more periodic than the reference.
+- The low foundation is a designed layer (orders + rumble), not a measured mount/body transfer.
 - The V8's half-order (burble) share rises with rpm (it comes from the two banks' different pulse shapes
   meeting slightly different pipes); at idle it is modest.
 - Steady states between the calibration points: the off-gas gap measured 2.1-7.2 dB over 1500-6500 rpm
   (3-5 dB at most points; the 3000 rpm test point 3.4-4.5 dB).
 - The V8's overrun burble and its exhaust resonance near 6300 rpm swing a single 100 ms envelope by ~3 dB, so its
   lift and demo-shift checks need averaging (16 lifts) or a 165 ms window; the strict shift test is unaffected.
-- Start-up costs ~160 ms CPU here (perhaps 0.6-0.8 s on the head unit's Atom) before the first block.
+- Start-up costs ~290 ms CPU here (perhaps 1-1.5 s on the head unit's Atom) before the first block.
+- Loudness against rpm is smooth at 1000 rpm steps; at 500 rpm resolution it still ripples by up to ~0.8 dB
+  (pipe/muffler colour and the slow drifts).
+- A V8 upshift arriving as an instantaneous 3200 rpm telemetry step dips ~3.3 dB for ~100 ms (the strict shift test
+  with the car's ramped rpm: <= 1.7 dB).
+- Near redline the protection's peak limiter (after the car's +6 dB) takes ~1 dB off the crests.
 - The turbo whistle is a narrow band at 1.4-4.6 kHz, now faint; the blow-off has no BMW-specific recording behind it.
 
 ## Credits and licenses
