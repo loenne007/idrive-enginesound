@@ -2,7 +2,8 @@
 // node test/service.test.js: the service (tool/lfb-enginesound/esd.js) with a fake synth, driven by the app's own
 // client (apps/lfb_enginesound/daemon.js) over a real socket: every control line reaches the synth, and the kept
 // ones (preset, turbo, volume, mute, every sound setting) are replayed when the synth or the connection restarts;
-// the SmartX playback endpoints are read from the shared-memory files; a test tone's result is in the status.
+// the SmartX playback endpoints are read from the shared-memory files; a test tone's result and what the playing synth
+// says about its device (format, dropouts) are in the status.
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -17,6 +18,8 @@ fs.writeFileSync(fake, '#!/usr/bin/env node\n' +
     "log('START ' + process.argv.slice(2).join(' '));\n" +
     // (a test tone: what the real synth says once the car reads the device)
     "if (process.argv[2] === '--tone') { console.error('alsa: connected ' + process.argv[3].slice(5) + ' (24000 Hz, mono)'); console.error('alsa: playing (the device takes the sound)'); setTimeout(() => process.exit(0), 200); }\n" +
+    // (playing: what the real synth says about its device)
+    "else { const dev = process.argv[3].slice(5); console.error('alsa: connected ' + dev + ' (24000 Hz, mono, 1536 frames buffer, 1536 kept queued)'); console.error('alsa: dropouts 2 (0 underruns, 2 times the queue was empty)'); console.error('alsa: queue 512 to 1536 of 1536 frames'); }\n" +
     "let b = ''; process.stdin.on('data', (d) => { b += d; let i; while ((i = b.indexOf('\\n')) >= 0) { const l = b.slice(0, i); b = b.slice(i + 1); log(l); if (l === 'Q') process.exit(0); } });\n");
 fs.chmodSync(fake, 0o755);
 // the shared-memory files of a G20 head unit (a few of them): p = playback endpoints, c = capture
@@ -67,6 +70,9 @@ async function until(what, fn) {
     const st = await new Promise((r) => { d.once('change', () => r(d.status)); d.send('STATUS'); });
     assert.strictEqual(st.synth, 'running');
     assert.strictEqual(st.device, 'devB');
+    // what the synth said about its device stays in the status
+    assert.deepStrictEqual(st.alsa, { dev: 'devB', format: '24000 Hz, mono, 1536 frames buffer, 1536 kept queued',
+        dropouts: '2 (0 underruns, 2 times the queue was empty)', queue: '512 to 1536 of 1536 frames' });
     // the SmartX playback endpoints, from the files' names
     await until('the endpoint list arrives', () => d.shm && Array.isArray(d.shm.endpoints));
     assert.deepStrictEqual(d.shm.endpoints, ['CarLifeMedia_CF_48_STEREO', 'Media_Overlay_Converter_Source_CF_24_MONO', 'TencentOverlay_CF_24_MONO']);

@@ -14,7 +14,8 @@
  *   OUT <alsa device>|none   play into that ALSA device (the synth is started / restarted on it); none stops it
  *   TONE <alsa device>       routing test: 10 s of beeps into that device (the synth is paused meanwhile); what its
  *                            synth says is in STATUS as lastTone
- *   STATUS                   one JSON status line back
+ *   STATUS                   one JSON status line back (alsa: what the synth said about its device: format,
+ *                            dropouts, the queue's range)
  *   SHM                      the SmartX endpoints found in /dev/shm, as JSON
  * Every other line (P / E / T / V / M / S / X, see synth/PROTOCOL.md) goes to the synth's stdin as it is. The last
  * E / T / V / M line and the last X line of every sound setting are replayed when the synth starts again, so a
@@ -28,7 +29,7 @@ const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 
-const VERSION = '1.2.1';
+const VERSION = '1.2.2';
 const RUN_DIR = process.env.ES_RUN_DIR || '/run/lfb-enginesound';
 const SOCK = path.join(RUN_DIR, 'ctl.sock');
 const SYNTH_DIR = process.env.ES_SYNTH_DIR || __dirname;
@@ -58,8 +59,18 @@ function stickyKey(line) {
 const log = (m) => process.stderr.write(new Date().toISOString().slice(11, 19) + ' esd: ' + m + '\n');
 
 /* ---------------- the synth process ---------------- */
-const state = { engine: null, device: null, tone: null, lastTone: null, sticky: {}, recent: [], starts: 0, lastStart: 0, child: null, retryT: null };
+const state = { engine: null, device: null, tone: null, lastTone: null, alsa: null, sticky: {}, recent: [], starts: 0, lastStart: 0, child: null, retryT: null };
 const remember = (line) => { state.recent.push(line); if (state.recent.length > 30) state.recent.shift(); };
+/** What the playing synth says about its device, kept for STATUS (the last lines scroll away): the format and
+ *  buffer it opened ({ dev, format }), its dropouts ("3 (0 underruns, 3 times the queue was empty)") and how far
+ *  its queue went down ("1024 to 1536 of 1536 frames"). */
+function alsaSays(line) {
+    let m = /^alsa: connected (\S+) \((.*)\)$/.exec(line);
+    if (m) { state.alsa = { dev: m[1], format: m[2], dropouts: null, queue: null }; return; }
+    if (!state.alsa) return;
+    if ((m = /^alsa: dropouts (.*)$/.exec(line))) state.alsa.dropouts = m[1];
+    else if ((m = /^alsa: queue (.*)$/.exec(line))) state.alsa.queue = m[1];
+}
 
 function startSynth() {
     if (state.child || !state.device || state.tone) return;
@@ -87,7 +98,7 @@ function startSynth() {
     child.stderr.on('data', (d) => {
         buf += d.toString();
         let i;
-        while ((i = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1); if (l) { remember(l); log('synth: ' + l); } }
+        while ((i = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1); if (l) { remember(l); alsaSays(l); log('synth: ' + l); } }
         if (buf.length > 4096) buf = '';
     });
     child.on('exit', (code, sig) => {
@@ -185,7 +196,7 @@ function shmEndpoints() {
 function status() {
     return {
         type: 'status', version: VERSION, device: state.device, synth: state.child ? 'running' : state.device ? 'starting' : 'stopped',
-        tone: state.tone ? state.tone.dev : null, lastTone: state.lastTone, sticky: state.sticky, log: state.recent.slice(-16),
+        tone: state.tone ? state.tone.dev : null, lastTone: state.lastTone, alsa: state.alsa, sticky: state.sticky, log: state.recent.slice(-16),
         engine: path.basename(synthPath()).replace(/^es-synth-/, ''), engines: engines(), synthFile: fs.existsSync(synthPath()),
     };
 }

@@ -18,6 +18,12 @@ typedef struct {
     /* (the queue below is counted in the device's frames) */
     long target;                  /* frames to keep queued now: the whole buffer until playback runs, then `keep` */
     long buffer, keep;            /* the device's buffer; what is kept queued once it runs (a period less: lower latency) */
+    /* dropouts: the device reported an underrun, or its queue was found empty while it played */
+    long xruns, empties, low;     /* both counts since the device was opened; the smallest queue seen while it played */
+    int dry;                      /* the queue is empty right now (counted once) */
+    long rep_n;                   /* the dropouts the last report line said */
+    double rep_at, run_at;        /* when the next report line may come; when playback first ran (0: not yet) */
+    int rep_queue;                /* the one line with the queue's range was written */
     int started;                  /* the device was seen taking frames since the last (re)start: playback runs */
     long expect;                  /* the queue as it would be with nothing taken: the last delay + what was written since */
     long taken, refused;          /* since the last status line: engine frames the device accepted, blocks it refused (-EAGAIN) */

@@ -38,6 +38,9 @@ function modeOf(v) {
     return /SPORT|BOOST/i.test(String(raw)) ? 'sport' : 'other';
 }
 
+/** A value of the AudioManager for a report line (missing: "?"). */
+const show = (v) => (v === undefined || v === null ? '?' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+
 /* The mix route chosen on the Audio page, kept in the app's data folder (no file: the default). */
 function mixStore(dataDir, log) {
     const file = path.join(dataDir || '.', 'mix-route.json');
@@ -79,6 +82,23 @@ async function background(bg) {
         },
     };
 
+    /* The car's volumes as the AudioManager lists them per sink (Audio page, read every second while it shows): is
+     * the volume knob's position among them? */
+    const volumes = {
+        sinks: null, error: null, busy: false,
+        read() {
+            if (volumes.busy) return;
+            volumes.busy = true;
+            route.sinks().then((l) => { volumes.sinks = l; volumes.error = null; }, (e) => { volumes.error = String(e && e.message || e); })
+                .then(() => { volumes.busy = false; });
+        },
+        text() {
+            if (!volumes.sinks) return volumes.error ? 'Car volume: not readable' : 'Car volume: reading...';
+            const v = volumes.sinks.filter((x) => x.id === SINK || x.id === 1).map((x) => 'sink ' + x.id + ' = ' + show(x.volume) + (/^MS_MUTED$|^1$/.test(String(x.mute)) ? ' muted' : ''));
+            return 'Car volume: ' + (v.join(', ') || 'no sink listed');
+        },
+    };
+
     /* The audio report (Audio page > Diagnose): what the AudioManager lists, the SmartX files, the service's last
      * lines. Shown on the page, written to the log and to audio-report.txt in the app's data folder. */
     const report = {
@@ -91,6 +111,10 @@ async function background(bg) {
                 const st = daemon.status || {}, shm = daemon.shm || {}, r = route.route || route.failed, L = [];
                 L.push('SERVICE ' + (daemon.connected ? (st.version || '?') + ' engine ' + st.engine + ' synth ' + st.synth : 'not connected'));
                 L.push('out ' + (st.device || '-') + (st.tone ? ' tone ' + st.tone : ''));
+                if (st.alsa) {
+                    L.push('ALSA ' + st.alsa.format);
+                    L.push('  dropouts ' + (st.alsa.dropouts || '0') + (st.alsa.queue ? ', queue ' + st.alsa.queue : ''));
+                }
                 (st.log || []).slice(-10).forEach((x) => L.push('  ' + x));
                 L.push('ROUTE ' + route.state + (r ? ' ' + r.name + ' ' + r.source + '->' + r.sink : '') + (route.connState ? ' ' + route.connState : '') + (route.error ? ' ' + route.error : ''));
                 L.push('mix ' + (core.mixOn() ? 'on' : 'off') + ', mix route ' + core.activeRoute().name + ' ' + core.activeRoute().device);
@@ -98,11 +122,11 @@ async function background(bg) {
                 L.push('CONNECTIONS');
                 (l.connections || []).forEach((c) => L.push('  ' + c.id + ': ' + c.source + '->' + c.sink + ' ' + c.state));
                 L.push('SINKS');
-                (l.sinks || []).forEach((x) => L.push('  ' + x.id + ' ' + x.name));
+                (l.sinks || []).forEach((x) => L.push('  ' + x.id + ' ' + x.name + ' vol ' + show(x.volume) + ' ' + show(x.mute) + ' class ' + show(x.cls)));
                 L.push('SHM (service ids ' + (shm.ids || '?') + ')' + (shm.error ? ' error ' + shm.error : ''));
                 (shm.all || shm.files || []).forEach((x) => L.push('  ' + x));
                 L.push('SOURCES');
-                (l.sources || []).forEach((x) => L.push('  ' + x.id + ' ' + x.name));
+                (l.sources || []).forEach((x) => L.push('  ' + x.id + ' ' + x.name + ' class ' + show(x.cls) + ' ' + show(x.avail)));
                 report.lines = L; report.loading = false;
                 L.forEach((x) => log.info('report: ' + x));
                 try { fs.writeFileSync(path.join(bg.dataDir || '.', 'audio-report.txt'), L.join('\n') + '\n'); } catch (e) { log.warn('report: ' + e); }
@@ -131,14 +155,14 @@ async function background(bg) {
     settings.onChange((key) => core.onSetting(key));
     core.start();
     log.info('engine sound: background running');
-    return { core, car, daemon, route, audio, report };
+    return { core, car, daemon, route, audio, report, volumes };
 }
 
 mgu.run({
     background,
     async start(ctx) {
         const { ui, settings, log } = ctx;
-        const { core, daemon, route, audio, report } = ctx.background || await background(ctx);
+        const { core, daemon, route, audio, report, volumes } = ctx.background || await background(ctx);
         let diag = false, diagPage = 0, mixPage = 0;
         let dirty = true, page = 0;
         const redraw = () => { dirty = true; return render(); };
@@ -308,9 +332,13 @@ mgu.run({
             G.button(cv, t, 48, 344, 552, 52, testing ? 'Test: listen...' : 'Test this route (10 s beeps)', testing ? null : () => { tested_ = core.activeRoute(); core.test(); return redraw(); },
                 { key: 'test-route', busy: testing });
             const eps = core.endpoints();
-            cv.text(audio.loading ? 'AudioManager: reading the sources...' : audio.sources ? 'AudioManager: ' + audio.sources.length + ' sources'
-                : 'AudioManager list unavailable' + (audio.error ? ': ' + audio.error : '') + ' - default used', 48, 432, 16, audio.sources || audio.loading ? t.dim : t.warn);
-            cv.text(eps ? 'SmartX: ' + eps.length + ' endpoints' : 'SmartX list unavailable (service) - default device assumed', 48, 458, 16, eps ? t.dim : t.warn);
+            // the playing synth's device: its format, and the dropouts it counted (underruns, an empty queue)
+            const al = outputSays();
+            cv.text(al.text.slice(0, 62), 48, 418, 16, al.bad ? t.warn : t.dim);
+            cv.text(audio.loading ? 'AudioManager: reading the sources...' : audio.sources ? 'AudioManager: ' + audio.sources.length + ' sources' + (eps ? ', SmartX: ' + eps.length + ' endpoints' : '')
+                : 'AudioManager list unavailable' + (audio.error ? ': ' + audio.error : '') + ' - default used', 48, 442, 16, audio.sources || audio.loading ? t.dim : t.warn);
+            if (!eps) cv.text('SmartX list unavailable: default device assumed', 48, 466, 16, t.warn);
+            cv.text(volumes.text().slice(0, 40), 48, 494, 16, t.dim);
             G.button(cv, t, 420, 468, 180, 36, diag ? 'Routes' : 'Diagnose', () => { diag = !diag; diagPage = 0; if (diag) report.make(); return redraw(); }, { key: 'diag' });
 
             if (diag) return drawReport(cv, t);
@@ -365,6 +393,14 @@ mgu.run({
             return v.ok === null ? null : { ok: v.ok, text: 'Synth: ' + v.text };
         }
 
+        /** The playing synth's device in a line: { text, bad (it had dropouts) }. */
+        function outputSays() {
+            const st = daemon.status, a = st && st.alsa;
+            if (!a || !st.device || a.dev !== st.device) return { text: 'Output: not playing', bad: false };
+            const m = /^(\d+) Hz, (\w+), (\d+) frames/.exec(a.format), n = a.dropouts ? parseInt(a.dropouts, 10) : 0;
+            return { text: 'Output: ' + (m ? m[1] / 1000 + ' kHz ' + m[2] + ', buffer ' + m[3] : a.format) + ', dropouts: ' + n, bad: n > 0 };
+        }
+
         // the audio report: small text, two columns, a page at a time (photograph it, or read audio-report.txt)
         function drawReport(cv, t) {
             G.panel(cv, t, 640, 44, 936, 468, 'Audio report');
@@ -396,8 +432,9 @@ mgu.run({
         let last = 0, asked = 0;
         ctx.loop('MAIN', 10, () => {
             const n = Date.now();
-            // (a test's result comes with the service's status: asked every second meanwhile and shortly after)
-            if (page === 2 && n < core.testUntil + 3000 && n - asked > 1000) { asked = n; daemon.send('STATUS'); }
+            // the Audio page shows the service's status (a test's result, the output's dropouts) and the car's volumes
+            // live: both asked every second
+            if (page === 2 && n - asked > 1000) { asked = n; daemon.send('STATUS'); volumes.read(); }
             // the live numbers: 10 times a second on the Engine page; the route's state twice a second on the Audio page
             if (dirty || (page === 0 && n - last > 100) || (page === 2 && n - last > 500)) { last = n; return render(); }
             return null;

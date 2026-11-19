@@ -96,7 +96,10 @@ CarLifeMedia is: `TencentOverlay`, `CarLifeNavigation`, `TencentTTS`, `CarLifeSp
 marked available only while the engine plays. BMW's own navigation, speech, phone, CarPlay and Android Auto channels
 are never used.
 
-Mix is not yet confirmed in the car. To find the route that works:
+In the car (1.2.1) the default route plays over the music; the engine is mixed in before the car's volume, so the
+volume knob moves both. The **Audio** page shows the playing output's format and its **dropouts** (an underrun the
+device reported, or its queue found empty; after the first one the whole buffer is kept queued) and the **car
+volume** per sink as the AudioManager lists it. To try another route:
 
 1. Switch *Settings → Legacy* on and open the **Audio** page. It reads the AudioManager's sources and the SmartX
    endpoints (**Refresh** reads them again) and lists the **mix routes**: each source above that the car has, to the

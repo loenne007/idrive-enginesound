@@ -109,7 +109,8 @@ static int open_pcm(Alsa *a, const char *dev, double now) {
     }
     /* snd_pcm_set_params starts playback once the buffer is full (SmartX: 3 x 1024 frames = 64 ms). Fill it; once
      * it runs, keep one period less queued (2 x 1024 = 43 ms): the device still finds a whole period after each
-     * read, and the sound is 21 ms closer to the engine. ES_ALSA_KEEP (frames) overrides. */
+     * read, and the sound is 21 ms closer to the engine. After a dropout the whole buffer is kept (dropout()).
+     * ES_ALSA_KEEP (frames) overrides. */
     {
         unsigned long buffer = 0, period = 0;
         const char *k = getenv("ES_ALSA_KEEP");
@@ -117,7 +118,9 @@ static int open_pcm(Alsa *a, const char *dev, double now) {
         decimator(a);
         if (a->get_params(a->pcm, &buffer, &period) < 0 || buffer < 256) buffer = (unsigned long)us * (rate / 1000) / 1000, period = 0;
         a->buffer = (long)buffer;
-        a->keep = period >= 128 && buffer >= 3 * period ? (long)(buffer - period) : (long)buffer;
+        /* (a prompt / overlay endpoint, 24 kHz or mono, keeps the whole buffer: what reads it is not known to take
+         * period by period, and its path to the speakers is the longer one anyway) */
+        a->keep = period >= 128 && buffer >= 3 * period && rate == 48000 && channels == 2 ? (long)(buffer - period) : (long)buffer;
         if (k) {
             long x = strtol(k, 0, 10);
             if (x >= 256 && x <= a->buffer) a->keep = x;
@@ -128,6 +131,8 @@ static int open_pcm(Alsa *a, const char *dev, double now) {
         a->taken = a->refused = 0;
         a->stat_at = now + 2;
         a->stat_state = 0;
+        a->xruns = a->empties = a->rep_n = 0, a->low = -1, a->dry = 0;
+        a->rep_at = a->run_at = 0, a->rep_queue = 0;
     }
     fprintf(stderr, "alsa: connected %s (%u Hz, %s, %ld frames buffer, %ld kept queued)\n", dev, a->rate,
             a->channels == 1 ? "mono" : "stereo", a->buffer, a->keep);
@@ -149,6 +154,30 @@ static void status(Alsa *a, double now) {
     a->taken = a->refused = 0;
 }
 
+/* A dropout (the device reported an underrun, or its queue ran empty while it played): from now the whole buffer is
+ * kept queued, a period more than the low-latency target. */
+static void dropout(Alsa *a) {
+    a->low = -1, a->run_at = 0, a->rep_queue = 0; /* the queue's range is measured (and said) again */
+    if (a->keep >= a->buffer) return;
+    a->keep = a->buffer;
+    if (a->started) a->target = a->keep;
+    fprintf(stderr, "alsa: dropout: the whole buffer (%ld frames) is kept queued from now\n", a->buffer);
+}
+
+/* The dropouts in a line when their number changed (at most every 5 s), and, 10 s into playback and 10 s after a
+ * dropout, how far the queue went down. The service keeps both for the app's Audio page. */
+static void report(Alsa *a, double now) {
+    long n = a->xruns + a->empties;
+    if (now < a->rep_at) return;
+    if (n != a->rep_n) {
+        fprintf(stderr, "alsa: dropouts %ld (%ld underruns, %ld times the queue was empty)\n", n, a->xruns, a->empties);
+        a->rep_n = n, a->rep_at = now + 5;
+    } else if (!a->rep_queue && a->run_at > 0 && now >= a->run_at + 10 && a->low >= 0) {
+        fprintf(stderr, "alsa: queue %ld to %ld of %ld frames\n", a->low, a->target, a->buffer);
+        a->rep_queue = 1;
+    }
+}
+
 long alsa_room(Alsa *a, const char *dev, double now) {
     long delay = 0;
     int e;
@@ -164,6 +193,7 @@ long alsa_room(Alsa *a, const char *dev, double now) {
             drop_pcm(a, now + 2);
             return -1;
         }
+        a->xruns++, dropout(a);
         a->started = 0, a->target = a->buffer, a->expect = -1; /* recovered: stopped again until the buffer is full */
         return a->target * a->div;
     }
@@ -171,6 +201,14 @@ long alsa_room(Alsa *a, const char *dev, double now) {
     status(a, now);
     /* the queue went down by itself: the device takes frames, playback runs: from now one period less is kept */
     if (!a->started && a->expect >= 0 && delay < a->expect) a->started = 1, a->target = a->keep;
+    if (a->started) {
+        if (a->run_at <= 0) a->run_at = now;
+        if (a->low < 0 || delay < a->low) a->low = delay;
+        /* nothing queued while it plays: the device found (or will find) no frames, an underrun it does not report */
+        if (delay > 0) a->dry = 0;
+        else if (!a->dry) a->dry = 1, a->empties++, dropout(a);
+    }
+    report(a, now);
     a->expect = delay;
     if (!a->started) return delay < a->buffer ? a->buffer * a->div : 0; /* fill it up (a last short write may drop its tail) */
     return delay >= a->target ? 0 : (a->target - delay) * a->div;      /* (never negative: that means "not open") */
@@ -227,6 +265,7 @@ static int write_dev(Alsa *a, const int16_t *buf, unsigned n, double now) {
         drop_pcm(a, now + 2);
         return 0;
     }
+    a->xruns++, dropout(a);
     a->started = 0, a->target = a->buffer, a->expect = -1; /* an underrun recovered: fill up again */
     return 1;
 }

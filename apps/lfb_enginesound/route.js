@@ -131,6 +131,11 @@ const stateName = (s) => STATES[s] || String(s);
 const CHECK_MS = 1500;        // the connection's state is looked at this long after a connect
 const MIX_SETTLE_MS = 6000;   // a mix connection not CS_CONNECTED by then is released (route failed)
 
+/* a main sink / source as the AudioManager lists it (am_SinkType_s: sinkID, name, availability, volume, muteState,
+ * sinkClassID), in short */
+const availOf = (x) => { const a = x && x.availability; return a && typeof a === 'object' ? a.availability : a; };
+const sinkOf = (x) => ({ id: x.sinkID, name: String(x.name || ''), volume: x.volume, mute: x.muteState, cls: x.sinkClassID, avail: availOf(x) });
+
 class Route {
     /** dataDir: where our open mix connection is noted (route-state.json), so a start after a crash can remove it. */
     constructor(signals, log, dataDir) {
@@ -289,7 +294,6 @@ class Route {
         });
     }
 
-    /** The AudioManager's main sources, [{ id, name }]; throws when the list is unavailable. */
     /** Everything the AudioManager lists, for the Audio page's report: { sources, sinks, connections, errors }. */
     lists() {
         return this._queue(async () => {
@@ -298,14 +302,24 @@ class Route {
             const get = async (method, key, listKey, map) => {
                 try { out[key] = arrayIn(await this._call(method, {}, 3000), listKey).map(map); } catch (e) { out.errors.push(method + ': ' + (e && e.message || e)); }
             };
-            await get('getListMainSources', 'sources', 'listMainSources', (x) => ({ id: x.sourceID, name: String(x.name || '') }));
-            await get('getListMainSinks', 'sinks', 'listMainSinks', (x) => ({ id: x.sinkID, name: String(x.name || '') }));
+            await get('getListMainSources', 'sources', 'listMainSources', (x) => ({ id: x.sourceID, name: String(x.name || ''), cls: x.sourceClassID, avail: availOf(x) }));
+            await get('getListMainSinks', 'sinks', 'listMainSinks', sinkOf);
             await get('getListMainConnections', 'connections', 'listConnections',
                 (x) => ({ id: x.mainConnectionID, source: x.sourceID, sink: x.sinkID, state: stateName(x.connectionState) }));
             return out;
         });
     }
 
+    /** The AudioManager's main sinks with their volume and mute state, [{ id, name, volume, mute, cls }] (the Audio
+     *  page shows the volumes: does the car's volume knob show up here?); throws when the list is unavailable. */
+    sinks() {
+        return this._queue(async () => {
+            await this._init();
+            return arrayIn(await this._call('getListMainSinks', {}, 3000), 'listMainSinks').map(sinkOf).filter((s) => typeof s.id === 'number');
+        });
+    }
+
+    /** The AudioManager's main sources, [{ id, name }]; throws when the list is unavailable. */
     sources() {
         return this._queue(async () => {
             await this._init();
