@@ -2,14 +2,11 @@
 // node test/knob.test.js: the volume knob over the music (apps/lfb_enginesound/knob.js, core.js hold / trim) with a
 // fake car: its main volume is the music's while only the music plays and our source's while the engine is connected.
 const assert = require('assert');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
 const { Core } = require('../apps/lfb_enginesound/core');
 const { Knob, POLL_MS, QUIET_MS, PAUSE_MS, CAP } = require('../apps/lfb_enginesound/knob');
 
-function make(over, dataDir) {
-    const vals = Object.assign({ enabled: true, engine: 'v8', soundEngine: 'simulate', volume: 50, mix: true, knob: 'music', rpmMap: 'locked', maxTorque: 400, turbo: true }, over || {});
+function make(over) {
+    const vals = Object.assign({ enabled: true, engine: 'v8', soundEngine: 'simulate', volume: 50, mix: true, knob: 'engine', rpmMap: 'locked', maxTorque: 400, turbo: true }, over || {});
     const sent = [];
     let t = 1e6;
     const now = () => t;
@@ -24,7 +21,7 @@ function make(over, dataDir) {
     const settings = { get: (k) => vals[k], set: (k, v) => { vals[k] = v; core.onSetting(k); } };
     const core = new Core({ settings, log, daemon: { send: (l) => sent.push(l), shm: null }, route, now });
     core._applySettings();       // (what core.start() sends first, without its timer)
-    const knob = new Knob({ core, settings, log, now, dataDir,
+    const knob = new Knob({ core, settings, log, now,
         link: () => (route.state !== 'connected' || !route.route || route.route.kind !== 'mix' ? 'off' : route.connState === 'CS_CONNECTED' ? 'connected' : 'linked') });
     /** ms of the app running: core.tick every 10 ms, the number read and knob.tick every POLL_MS; each(t) before every step. */
     const run = (ms, each) => {
@@ -41,16 +38,41 @@ function make(over, dataDir) {
 }
 const last = (sent, re) => sent.filter((l) => re.test(l)).pop();
 
-// music mode: the engine plays; a turn of the knob makes it step aside, the rest of the turn is the music's, and
-// it comes back QUIET_MS after the knob rests
+// engine mode (the default): as the car does it. The knob moves the engine while it plays, nothing steps aside,
+// and the report says where it was left
 {
     const { core, knob, car, route, sent, run } = make();
     run(3000);
     assert.strictEqual(knob.mode, 'watching');
-    assert.strictEqual(knob.ref, 40, 'the first volume seen is the reference');
     assert(!knob.report().some((l) => /not readable/.test(l)), 'the first reading is waited for: ' + knob.report());
+    run(500, (t) => { if (t % 100 === 0) car.turn(1); });
+    run(1500);
+    assert.strictEqual(core.held, false);
     assert.strictEqual(route.state, 'connected');
-    assert.strictEqual(last(sent, /^V /), 'V 0.90', 'no trim at the reference');
+    assert.strictEqual(car.overlay, 45, 'every step reached the engine');
+    assert.strictEqual(knob.handovers, 0);
+    assert.strictEqual(last(sent, /^V /), 'V 0.90', 'the gain is the volume setting');
+    assert(knob.report().some((l) => /engine 40 -> 45$/.test(l)), knob.report().join('\n'));
+    assert(knob.report()[0].indexOf('KNOB engine, watching, vol 45, 0.0 dB, 0 hand-overs') === 0, knob.report()[0]);
+    // for the speakers: turned over the cap (to the car's top, 55), the synth turns down what is over
+    assert.strictEqual(CAP, 48);
+    run(1000, (t) => { if (t % 100 === 0) car.turn(1); });
+    run(1000);
+    assert.strictEqual(car.overlay, 55);
+    assert.strictEqual(last(sent, /^V /), 'V ' + (0.9 * Math.pow(10, -7 / 20)).toFixed(2));
+    assert.strictEqual(knob.text(), 'Car volume 55, knob: engine, engine -7 dB');
+    run(1000, (t) => { if (t % 100 === 0) car.turn(-1); });
+    run(1000);
+    assert.strictEqual(last(sent, /^V /), 'V 0.90');
+    assert.strictEqual(knob.text(), 'Car volume 45, knob: engine');
+}
+// music mode: a turn of the knob makes the engine step aside, the rest of the turn is the music's, and it comes
+// back QUIET_MS after the knob rests
+{
+    const { core, knob, car, route, sent, settings, run } = make({ knob: 'music' });
+    run(3000);
+    assert.strictEqual(knob.mode, 'watching');
+    assert.strictEqual(route.state, 'connected');
     // one step every 100 ms for a second
     let steps = 0;
     run(1000, (t) => { if (t % 100 === 0) { car.turn(1); steps++; } });
@@ -71,71 +93,36 @@ const last = (sent, re) => sent.filter((l) => re.test(l)).pop();
     assert.strictEqual(last(sent, /^M /), 'M 0');
     assert.strictEqual(knob.mode, 'watching');
     assert.strictEqual(knob.handovers, 1);
-    // the engine's volume in the car went up by the first steps: the synth makes up for it, 1 dB a step
-    const want = 0.9 * Math.pow(10, -(car.overlay - 40) / 20);
-    assert(Math.abs(Number(last(sent, /^V /).slice(2)) - want) < 0.011, last(sent, /^V /) + ' for ' + want);
-    assert(knob.report()[0].indexOf('KNOB music, watching, vol ' + car.overlay + ', ref 40, ') === 0, knob.report()[0]);
+    assert.strictEqual(last(sent, /^V /), 'V 0.90', 'the gain is the volume setting');
     assert(knob.report().some((l) => /engine aside/.test(l)) && knob.report().some((l) => /engine back/.test(l)));
-}
-// the trim is limited: far above the reference -12 dB, far below +6 dB; the reference is kept on disk
-{
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'knob-'));
-    fs.writeFileSync(path.join(dir, 'knob.json'), JSON.stringify({ ref: 30 }));
-    const a = make(null, dir);
-    a.car.overlay = 55;
-    a.run(3000);
-    assert.strictEqual(a.knob.ref, 30);
-    assert.strictEqual(last(a.sent, /^V /), 'V ' + (0.9 * Math.pow(10, -12 / 20)).toFixed(2));
-    const b = make(null, dir);
-    b.car.overlay = 10;
-    b.run(3000);
-    assert.strictEqual(last(b.sent, /^V /), 'V ' + (0.9 * Math.pow(10, 6 / 20)).toFixed(2));
-    // at full app volume the gain stays within the synth's range
-    const c = make({ volume: 100 }, dir);
-    c.car.overlay = 10;
-    c.run(3000);
-    assert.strictEqual(last(c.sent, /^V /), 'V 2.00');
-}
-// engine mode: the knob moves the engine as the car does it, nothing steps aside, and where it is left is the
-// reference; back in music mode that is what the app's volume is meant for
-{
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'knob-'));
-    const { core, knob, car, route, sent, settings, run } = make({ knob: 'engine' }, dir);
-    run(3000);
-    run(500, (t) => { if (t % 100 === 0) car.turn(1); });
-    run(1000);
-    assert.strictEqual(core.held, false);
-    assert.strictEqual(route.state, 'connected');
-    assert.strictEqual(car.overlay, 45, 'every step reached the engine');
-    assert.strictEqual(knob.ref, 45);
-    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'knob.json'), 'utf8')), { ref: 45 });
-    assert.strictEqual(last(sent, /^V /), 'V 0.90');
-    // for the speakers: turned over the cap (to the car's top, 55), the synth turns down what is over, and the
-    // reference stays at the cap
-    assert.strictEqual(CAP, 48);
-    run(1000, (t) => { if (t % 100 === 0) car.turn(1); });
-    run(1000);
-    assert.strictEqual(car.overlay, 55);
-    assert.strictEqual(knob.ref, CAP);
-    assert.strictEqual(last(sent, /^V /), 'V ' + (0.9 * Math.pow(10, -7 / 20)).toFixed(2));
-    run(1000, (t) => { if (t % 100 === 0) car.turn(-1); });
-    run(1000);
-    assert.strictEqual(knob.ref, 45);
-    assert.strictEqual(last(sent, /^V /), 'V 0.90');
-    settings.set('knob', 'music');
-    run(1000);
-    assert.strictEqual(knob.handovers, 0, 'the switch itself is no turn of the knob');
+    assert(knob.report().some((l) => new RegExp('engine on: ' + car.overlay + ' \\(music ' + car.music + '\\)$').test(l)), knob.report().join('\n'));
+    // switching to engine mode while aside brings the engine back at once
     car.turn(-2);
     run(600);
     assert.strictEqual(core.held, true);
-    // switching to engine mode while aside brings the engine back at once
     settings.set('knob', 'engine');
     run(POLL_MS + 20);
     assert.strictEqual(core.held, false);
+    // and the switch to music mode itself is no turn of the knob
+    run(3000);
+    settings.set('knob', 'music');
+    run(1000);
+    assert.strictEqual(knob.handovers, 2);
+}
+// exclusive after mix: nothing is turned down any more
+{
+    const { knob, car, sent, settings, run } = make();
+    car.overlay = 55;
+    run(3000);
+    assert.strictEqual(knob.trim, -7);
+    settings.set('mix', false);
+    run(1000);
+    assert.strictEqual(knob.trim, 0);
+    assert.strictEqual(last(sent, /^V /), 'V 0.90');
 }
 // the engine stops (or the app is switched off) while aside: nothing stays held
 {
-    const { core, knob, car, vals, run } = make();
+    const { core, knob, car, vals, run } = make({ knob: 'music' });
     run(3000);
     car.turn(3);
     run(600);
@@ -148,7 +135,7 @@ const last = (sent, re) => sent.filter((l) => re.test(l)).pop();
 }
 // exclusive (no mix): the knob is the car's business
 {
-    const { core, knob, car, run } = make({ mix: false });
+    const { core, knob, car, run } = make({ mix: false, knob: 'music' });
     run(3000);
     car.turn(5);
     run(1000);
@@ -158,7 +145,7 @@ const last = (sent, re) => sent.filter((l) => re.test(l)).pop();
 }
 // the volume cannot be read: nothing is held, the knob is left to the car
 {
-    const { core, knob, car, route, run } = make();
+    const { core, knob, car, route, run } = make({ knob: 'music' });
     run(3000);
     car.turn(3);
     run(600);
@@ -176,7 +163,7 @@ const last = (sent, re) => sent.filter((l) => re.test(l)).pop();
 // a number that moves by itself right after every return (not a hand on the knob): after three in a row the
 // hand-over rests, the engine keeps playing
 {
-    const { core, knob, car, route, run } = make();
+    const { core, knob, car, route, run } = make({ knob: 'music' });
     let seen = 'settling';
     run(40000, () => {
         if (knob.mode === 'watching' && seen !== 'watching') car.overlay += 4;      // (jumps as soon as it is watched)
@@ -194,7 +181,7 @@ const last = (sent, re) => sent.filter((l) => re.test(l)).pop();
 }
 // the test tone owns the route: the knob stays out of it
 {
-    const { core, knob, car, run } = make();
+    const { core, knob, car, run } = make({ knob: 'music' });
     run(3000);
     core.test();
     run(1000);

@@ -51,6 +51,40 @@ function amMissing() {
     } catch (e) { return ''; }
 }
 
+/* The car's SOME/IP catalog (what its firmware offers, the Store builds the app against it): for the report, what the
+ * AudioManager's two interfaces can do and which other interfaces sound like audio. */
+const CATALOG = process.env.MGU_SOMEIP_CATALOG || '/etc/oap/someip/someip-interfaces.json';
+const namesOf = (x) => (Array.isArray(x) ? x.map((e) => e && e.name).filter(Boolean) : x && typeof x === 'object' ? Object.keys(x) : []);
+/** words joined with ", " into lines of at most `width`, the first one after `head`, the others indented. */
+function wrap(head, words, width) {
+    const out = [];
+    let line = head;
+    words.forEach((w, i) => {
+        const piece = (line === head || line === '    ' ? '' : ', ') + w;
+        if (line.length + piece.length > width && line !== head && line !== '    ') { out.push(line + ','); line = '    ' + w; } else line += piece;
+        if (i === words.length - 1) out.push(line);
+    });
+    return out.length ? out : [head + '-'];
+}
+function catalogLines(file) {
+    let db;
+    try { db = JSON.parse(fs.readFileSync(file, 'utf8')).interfaces; } catch (e) { return ['CATALOG not readable: ' + String(e && e.code || e).slice(0, 40)]; }
+    if (!db || typeof db !== 'object') return ['CATALOG without interfaces'];
+    const L = [];
+    Object.keys(db).filter((k) => /^org\.genivi\.am\./.test(k)).sort().forEach((k) => {
+        const i = db[k] || {}, short = k.replace(/^org\.genivi\.am\./, '');
+        L.push('CATALOG ' + short);
+        wrap('  m: ', namesOf(i.methods), 66).forEach((x) => L.push(x));
+        wrap('  e: ', namesOf(i.events), 66).forEach((x) => L.push(x));
+        const f = namesOf(i.fields);
+        if (f.length) wrap('  f: ', f, 66).forEach((x) => L.push(x));
+    });
+    const other = Object.keys(db).filter((k) => !/^org\.genivi\.am\./.test(k) && /audio|sound|volume|genivi|speaker|amplif|acoustic|entertainmentsource|tone/i.test(k)).sort();
+    L.push('CATALOG other audio interfaces (' + other.length + ' of ' + Object.keys(db).length + ')');
+    other.slice(0, 60).forEach((k) => L.push('  ' + k.replace(/^de\.bmw\./, '').slice(-64) + ' m' + namesOf((db[k] || {}).methods).length + ' f' + namesOf((db[k] || {}).fields).length));
+    return L;
+}
+
 /* The mix route chosen on the Audio page, kept in the app's data folder (no file: the default). */
 function mixStore(dataDir, log) {
     const file = path.join(dataDir || '.', 'mix-route.json');
@@ -94,7 +128,7 @@ async function background(bg) {
 
     /* The volume knob over the music (knob.js): the car hands it to our source while the engine plays; the engine
      * steps aside while it is turned, so it stays the music's. */
-    const knob = new Knob({ core, settings, log, dataDir: bg.dataDir,
+    const knob = new Knob({ core, settings, log,
         link: () => (route.state !== 'connected' || !route.route || route.route.kind !== 'mix' ? 'off' : route.connState === 'CS_CONNECTED' ? 'connected' : 'linked') });
 
     /* The car's volumes as the AudioManager lists them per sink: the main sink's is the one the volume knob moves.
@@ -144,10 +178,21 @@ async function background(bg) {
                 (l.connections || []).forEach((c) => L.push('  ' + c.id + ': ' + c.source + '->' + c.sink + ' ' + c.state));
                 L.push('SINKS');
                 (l.sinks || []).forEach((x) => L.push('  ' + x.id + ' ' + x.name + ' vol ' + show(x.volume) + ' ' + show(x.mute) + ' class ' + show(x.cls)));
-                L.push('SHM (service ids ' + (shm.ids || '?') + ')' + (shm.error ? ' error ' + shm.error : ''));
-                (shm.all || shm.files || []).forEach((x) => L.push('  ' + x));
-                L.push('SOURCES');
-                (l.sources || []).forEach((x) => L.push('  ' + x.id + ' ' + x.name + ' class ' + show(x.cls) + ' ' + show(x.avail)));
+                // (the SmartX files themselves are known by now: their number only)
+                L.push('SHM ' + (shm.all || shm.files || []).length + ' files, ' + (shm.endpoints || []).length + ' playback endpoints (service ids ' + (shm.ids || '?') + ')' + (shm.error ? ' error ' + shm.error : ''));
+                const classes = (title, list) => {
+                    L.push(title);
+                    (list || []).forEach((c) => L.push(('  ' + c.id + ' ' + c.name + ' ' + (c.props && c.props.length ? JSON.stringify(c.props).replace(/"/g, '') : '')).slice(0, 68)));
+                };
+                classes('SOURCE CLASSES', l.sourceClasses);
+                classes('SINK CLASSES', l.sinkClasses);
+                L.push('SYSTEM PROPERTIES');
+                (l.system || []).forEach((x) => L.push('  ' + JSON.stringify(x).replace(/"/g, '').slice(0, 64)));
+                L.push('MAIN SINK SOUND');
+                (l.sinkSound || []).forEach((x) => L.push('  ' + JSON.stringify(x).replace(/"/g, '').slice(0, 64)));
+                L.push('SOURCES (id name class, - unavailable)');
+                (l.sources || []).forEach((x) => L.push('  ' + x.id + ' ' + x.name + ' c' + show(x.cls) + (/UNAVAILABLE|^2$/.test(String(x.avail)) ? ' -' : '')));
+                catalogLines(CATALOG).forEach((x) => L.push(x));
                 report.lines = L; report.loading = false;
                 L.forEach((x) => log.info('report: ' + x));
                 try { fs.writeFileSync(path.join(bg.dataDir || '.', 'audio-report.txt'), L.join('\n') + '\n'); } catch (e) { log.warn('report: ' + e); }

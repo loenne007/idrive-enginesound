@@ -100,17 +100,22 @@ In the car the default route plays over the music. The **Audio** page shows the 
 **dropouts** (an underrun the device reported, or its queue found empty; after the first one the whole buffer is kept
 queued).
 
-**The volume knob over the music.** While our source is connected the car hands its volume knob to it, as it does
-for a navigation prompt: the knob then moves the engine only, and the music stays where it was. The AudioManager's
-main sink (1) lists the volume the knob moves, so the app can see it turn (`knob.js`). With the setting *Volume knob
-over the music* on **Music** (the default) the engine steps aside as soon as the knob turns (muted, its route
-released), the car gives the knob back to the music, and the engine returns 1.5 s after the knob rests. The engine's
-loudness is then the app's *Volume* alone: what the first steps of a turn did to the engine's volume in the car, the
-synth's gain makes up for (1 dB a step, an estimate; within -12..+6 dB). On **Engine sound** the knob moves the engine
-while it plays, as the car does it, and where it is left is the level the app's volume is meant for. For the
-speakers, in both: the engine's volume in the car counts for no more than 48 (the car's top is 55); turned higher,
-the synth turns down what is over. The Audio page's last line shows the car volume, the knob's mode and the gain;
-**Diagnose** lists the knob's last events.
+**The volume knob over the music.** The car treats our source as an announcement (a G20's reports, 2026-11): the
+music is lowered while it is connected, the volume knob moves the source and not the music, and the source is never
+quieter than the music's own volume. The AudioManager's main sink (1) lists the volume the knob moves, so the app
+sees it (`knob.js`). The setting *Volume knob over the music*:
+
+- **Engine sound** (the default): as the car does it. The knob moves the engine while it plays; for the music's
+  volume, switch the engine sound off for a moment.
+- **Music**: the engine steps aside as soon as the knob turns (muted, its route released), the car gives the knob
+  back to the music, and the engine returns 1.5 s after the knob rests. The price: the engine pauses and the music
+  jumps to its own volume and back at every turn.
+
+For the speakers, in both: the source's volume in the car counts for no more than 48 (the car's top is 55); turned
+higher, the synth turns down what is over (1 dB a step, an estimate). The Audio page's last line shows the car
+volume, the knob's mode and that gain. **Diagnose** lists the knob's last events, the AudioManager's source and sink
+classes and properties, every source with its class, and what the car's SOME/IP catalog offers on the AudioManager's
+interfaces.
 
 To try another route:
 
@@ -146,7 +151,7 @@ below ~150 Hz held under -3 dBFS, the long-term power held under -8 dBFS RMS (lo
 | Volume | 10–100 %, default 50 %; the car's own volume knob applies on top. 50 % is the 90 % of versions before 1.1 (plus the 6 dB above), 100 % about 4 dB more |
 | Only in Sport mode | plays only while the driving mode is Sport |
 | Play over music (mix) | the mix route instead of the exclusive one (above) |
-| Volume knob over the music | **Music**: the knob stays the music's, the engine pauses while it turns; **Engine sound**: the knob moves the engine while it plays (above) |
+| Volume knob over the music | **Engine sound** (default): the knob moves the engine while it plays, as the car does it; **Music**: the knob stays the music's, the engine pauses while it turns (above) |
 | Turbo sound | the turbo whistle and blow-off of the turbo presets |
 | Sound: … | the Sound page's sliders |
 | Rev range, Car's max rpm, Car's max torque | the mapping above |

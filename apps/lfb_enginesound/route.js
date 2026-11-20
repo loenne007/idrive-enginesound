@@ -298,18 +298,25 @@ class Route {
         });
     }
 
-    /** Everything the AudioManager lists, for the Audio page's report: { sources, sinks, connections, errors }. */
+    /** Everything the AudioManager lists, for the Audio page's report: { sources, sinks, connections, sourceClasses,
+     *  sinkClasses, system (its properties), sinkSound (the main sink's sound properties), errors }. */
     lists() {
         return this._queue(async () => {
             await this._init();
-            const out = { sources: [], sinks: [], connections: [], errors: [] };
-            const get = async (method, key, listKey, map) => {
-                try { out[key] = arrayIn(await this._call(method, {}, 3000), listKey).map(map); } catch (e) { out.errors.push(method + ': ' + (e && e.message || e)); }
+            const out = { sources: [], sinks: [], connections: [], sourceClasses: [], sinkClasses: [], system: [], sinkSound: [], errors: [] };
+            const get = async (method, key, listKey, map, args) => {
+                try { out[key] = arrayIn(await this._call(method, args || {}, 3000), listKey).map(map); } catch (e) { out.errors.push(method + ': ' + String(e && e.message || e).slice(0, 40)); }
             };
+            // a class: its id, name and properties (what the car does with its sources: the report's CLASSES)
+            const cls = (idKey) => (x) => ({ id: x[idKey], name: String(x.name || ''), props: x.listClassProperties });
             await get('getListMainSources', 'sources', 'listMainSources', (x) => ({ id: x.sourceID, name: String(x.name || ''), cls: x.sourceClassID, avail: availOf(x) }));
             await get('getListMainSinks', 'sinks', 'listMainSinks', sinkOf);
             await get('getListMainConnections', 'connections', 'listConnections',
                 (x) => ({ id: x.mainConnectionID, source: x.sourceID, sink: x.sinkID, state: stateName(x.connectionState) }));
+            await get('getListSourceClasses', 'sourceClasses', 'listSourceClasses', cls('sourceClassID'));
+            await get('getListSinkClasses', 'sinkClasses', 'listSinkClasses', cls('sinkClassID'));
+            await get('getListSystemProperties', 'system', 'listSystemProperties', (x) => x);
+            await get('getListMainSinkSoundProperties', 'sinkSound', 'listSoundProperties', (x) => x, { sinkID: MAIN_SINK });
             return out;
         });
     }
