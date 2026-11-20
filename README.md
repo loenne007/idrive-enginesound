@@ -98,7 +98,10 @@ are never used.
 
 In the car the default route plays over the music. The **Audio** page shows the playing output's format and its
 **dropouts** (an underrun the device reported, or its queue found empty; after the first one the whole buffer is kept
-queued).
+queued). The car's overlay channels buffer only 512 frames (21 ms), so the synth asks for real-time scheduling for
+itself (round robin, priority 2; the service's unit allows it with `LimitRTPRIO`): at normal priority a busy head unit
+(the camera while parking) made it late, which is heard as crackle. The page says *realtime* when the car granted it;
+the report has the longest time the system kept the synth waiting (`longest wait`).
 
 **The volume knob over the music.** The car treats our source as an announcement (a G20's reports, 2026-11): the
 music is lowered while it is connected, the volume knob moves the source and not the music, and the source is never
@@ -107,13 +110,26 @@ sees it (`knob.js`). The setting *Volume knob over the music*:
 
 - **Engine sound** (the default): as the car does it. The knob moves the engine while it plays; for the music's
   volume, switch the engine sound off for a moment.
-- **Music**: the engine steps aside as soon as the knob turns (muted, its route released), the car gives the knob
-  back to the music, and the engine returns 1.5 s after the knob rests. The price: the engine pauses and the music
-  jumps to its own volume and back at every turn.
+- **Music, without a pause** (`direct`, set by a passed volume test): the car's AudioManager takes volumes from the
+  app. A turn of the knob moves our source's volume; the app puts it back at once (`setVolume` on the main sink) and
+  gives the steps to the music's connection (`setConnectionVolumeStep`, BMW's own call). So the engine stays as loud
+  as it was and the knob stays the music's. Nothing is passed on while anything but the music plays beside the engine
+  (a phone call, a prompt of the car), and the knob is the engine's again if a call fails twice.
+- **Music** (with a pause): the engine steps aside as soon as the knob turns (muted, its route released), the car
+  gives the knob back to the music, and the engine returns 1.5 s after the knob rests. The price: the engine pauses
+  and the music jumps to its own volume and back at every turn.
 
-For the speakers, in both: the source's volume in the car counts for no more than 48 (the car's top is 55); turned
+**The volume test** (Audio > Diagnose > Volume test, with the engine playing over music, about 15 s) finds out whether
+those two calls do in this car what their names say (`voltest.js`): it reads the music's and the engine's volume, sets
+the engine's 2 steps down and back, steps the music's connection 2 down, and looks whether the music followed; the
+music is put back to what it was. It only ever turns down, and stops where a call does not do what is expected.
+Passed, the setting switches to *Music, without a pause*. Its lines stay in the report.
+
+For the speakers, in all: the source's volume in the car counts for no more than 48 (the car's top is 55); turned
 higher, the synth turns down what is over (1 dB a step, an estimate). The Audio page's last line shows the car
-volume, the knob's mode and that gain. **Diagnose** lists the knob's last events, the AudioManager's source and sink
+volume, the knob's mode and that gain. **Diagnose** lists, first, the knob's last events, the volume test, every
+change of what played beside the engine (*LINKS*: a phone call, a prompt, and what the car did with our connection
+then) and the car's definitions of the volume calls; then the AudioManager's source and sink
 classes and properties, every source with its class, and what the car's SOME/IP catalog offers on the AudioManager's
 interfaces.
 
@@ -151,7 +167,7 @@ below ~150 Hz held under -3 dBFS, the long-term power held under -8 dBFS RMS (lo
 | Volume | 10–100 %, default 50 %; the car's own volume knob applies on top. 50 % is the 90 % of versions before 1.1 (plus the 6 dB above), 100 % about 4 dB more |
 | Only in Sport mode | plays only while the driving mode is Sport |
 | Play over music (mix) | the mix route instead of the exclusive one (above) |
-| Volume knob over the music | **Engine sound** (default): the knob moves the engine while it plays, as the car does it; **Music**: the knob stays the music's, the engine pauses while it turns (above) |
+| Volume knob over the music | **Engine sound** (default): the knob moves the engine while it plays, as the car does it; **Music, without a pause**: the knob stays the music's and the engine as loud as it was (needs the passed volume test, above); **Music**: the knob stays the music's, the engine pauses while it turns |
 | Turbo sound | the turbo whistle and blow-off of the turbo presets |
 | Sound: … | the Sound page's sliders |
 | Rev range, Car's max rpm, Car's max torque | the mapping above |
@@ -168,7 +184,7 @@ below ~150 Hz held under -3 dBFS, the long-term power held under -8 dBFS RMS (lo
 | `samples/` | the five sounds as recordings (`make -C synth samples`) |
 | `synth/PROTOCOL.md` | the shared command line and control lines |
 | `tools/` | `check_glibc.py` (a car binary's glibc versions and loader), `make_es_icon.js` (the app icon) |
-| `test/` | `core.test.js` (the app's logic and routes, with a fake service and AudioManager), `track.test.js` (the rpm estimate), `knob.test.js` (the volume knob over the music, with a fake car), `service.test.js` (the service with a fake synth, driven by the app's client) |
+| `test/` | `core.test.js` (the app's logic and routes, with a fake service and AudioManager), `track.test.js` (the rpm estimate), `knob.test.js` (the volume knob over the music and the volume test, with a fake car), `service.test.js` (the service with a fake synth, driven by the app's client) |
 | `kit/` | the MGU app kit from [idrive7-apps](https://github.com/cauliflowermossgrape/idrive7-apps) (MIT): runtime, `tools/build.py`, previews |
 | `mgu-repo.json` | the Store's repo-tree manifest: the head unit builds the app from source (`kit/tools/build.py`), the service's files are prebuilt |
 

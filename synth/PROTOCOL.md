@@ -17,9 +17,11 @@ e.g. `es-synth-simulate --out alsa:plug:smartx:CarLifeMedia_CF_48_STEREO --prese
 An ALSA device whose name says another format (`..._CF_24_MONO`, the car's prompt channels) is opened in that format
 and the output converted (`synth/common/out_alsa.c`). Logs go to stderr. A script has one `<seconds> <control line>` per line, in order (see
 `synth/waveguide/README.md`). `ES_ALSA_US` sets the ALSA buffer (default 64000 us). On ALSA the synth says on stderr
-what the device does: `alsa: connected <PCM> (<format>, <buffer>, <kept queued>)`, `alsa: playing` / `nobody reads`,
-`alsa: dropouts <n> (...)` when it counted one (the whole buffer is kept queued from then), and `alsa: queue <low>
-to <target> of <buffer> frames` 10 s into playback; the service keeps these for the app (STATUS `alsa`).
+what the device does: `alsa: connected <PCM> (<format>, <buffer>, <kept queued>)`, `alsa: priority realtime <n>` or
+`normal (realtime refused: ...)` (it asks for round-robin real-time scheduling when it opens the device),
+`alsa: playing` / `nobody reads`, `alsa: dropouts <n> (...), longest wait <ms> ms` when it counted one (the whole
+buffer is kept queued from then), and `alsa: queue <low> to <target> of <buffer> frames, longest wait <ms> ms` 10 s
+into playback (the longest time between two looks at the queue); the service keeps these for the app (STATUS `alsa`).
 
 ## Control lines
 

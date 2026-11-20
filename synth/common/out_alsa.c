@@ -3,6 +3,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <math.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,6 +44,27 @@ void alsa_close(Alsa *a) {
         dlclose(a->lib);
         a->lib = 0;
     }
+}
+
+/* Real-time scheduling for this process (round robin, the lowest priorities): the car's overlay channels have a
+ * buffer of 21 ms, and at normal priority the head unit keeps us waiting longer than that when it is busy (the
+ * camera while parking), which is heard as crackle. Needs the service's LimitRTPRIO; refused, it plays as before.
+ * Said in a line after every "connected" (the service keeps it for the app's Audio page). */
+#define ALSA_RT_PRIO 2
+static void realtime(Alsa *a) {
+    if (!a->rt) {
+#ifdef __linux__
+        struct sched_param sp;
+        memset(&sp, 0, sizeof(sp));
+        sp.sched_priority = ALSA_RT_PRIO;
+        a->rt = sched_setscheduler(0, SCHED_RR, &sp) == 0 ? 1 : -1;
+        a->rt_errno = errno;
+#else
+        a->rt = -1, a->rt_errno = ENOSYS; /* (a development computer) */
+#endif
+    }
+    if (a->rt > 0) fprintf(stderr, "alsa: priority realtime %d\n", ALSA_RT_PRIO);
+    else fprintf(stderr, "alsa: priority normal (realtime refused: %s)\n", strerror(a->rt_errno));
 }
 
 /* The device's own format, from a SmartX endpoint's name: ..._CF_<kHz>_<MONO|STEREO...>; else 48 kHz stereo. */
@@ -133,9 +155,11 @@ static int open_pcm(Alsa *a, const char *dev, double now) {
         a->stat_state = 0;
         a->xruns = a->empties = a->rep_n = 0, a->low = -1, a->dry = 0;
         a->rep_at = a->run_at = 0, a->rep_queue = 0;
+        a->last = 0, a->gap = 0;
     }
     fprintf(stderr, "alsa: connected %s (%u Hz, %s, %ld frames buffer, %ld kept queued)\n", dev, a->rate,
             a->channels == 1 ? "mono" : "stereo", a->buffer, a->keep);
+    realtime(a);
     return 1;
 }
 
@@ -170,10 +194,11 @@ static void report(Alsa *a, double now) {
     long n = a->xruns + a->empties;
     if (now < a->rep_at) return;
     if (n != a->rep_n) {
-        fprintf(stderr, "alsa: dropouts %ld (%ld underruns, %ld times the queue was empty)\n", n, a->xruns, a->empties);
+        fprintf(stderr, "alsa: dropouts %ld (%ld underruns, %ld times the queue was empty), longest wait %.0f ms\n", n, a->xruns,
+                a->empties, a->gap * 1000);
         a->rep_n = n, a->rep_at = now + 5;
     } else if (!a->rep_queue && a->run_at > 0 && now >= a->run_at + 10 && a->low >= 0) {
-        fprintf(stderr, "alsa: queue %ld to %ld of %ld frames\n", a->low, a->target, a->buffer);
+        fprintf(stderr, "alsa: queue %ld to %ld of %ld frames, longest wait %.0f ms\n", a->low, a->target, a->buffer, a->gap * 1000);
         a->rep_queue = 1;
     }
 }
@@ -195,6 +220,7 @@ long alsa_room(Alsa *a, const char *dev, double now) {
         }
         a->xruns++, dropout(a);
         a->started = 0, a->target = a->buffer, a->expect = -1; /* recovered: stopped again until the buffer is full */
+        a->last = 0;
         return a->target * a->div;
     }
     if (delay < 0) delay = 0;
@@ -202,6 +228,9 @@ long alsa_room(Alsa *a, const char *dev, double now) {
     /* the queue went down by itself: the device takes frames, playback runs: from now one period less is kept */
     if (!a->started && a->expect >= 0 && delay < a->expect) a->started = 1, a->target = a->keep;
     if (a->started) {
+        /* the longest time between two looks at the queue while it played: how long the system kept us waiting */
+        if (a->last > 0 && now - a->last > a->gap) a->gap = now - a->last;
+        a->last = now;
         if (a->run_at <= 0) a->run_at = now;
         if (a->low < 0 || delay < a->low) a->low = delay;
         /* nothing queued while it plays: the device found (or will find) no frames, an underrun it does not report */

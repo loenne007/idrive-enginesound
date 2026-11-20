@@ -24,6 +24,8 @@
  *   disconnect():     disconnect our connection (+ the 287 sweep and unavailable for the exclusive route)
  *   sources():        the AudioManager's main sources [{ id, name }] (getListMainSources), for the Audio page
  *   sinks():          its main sinks with their volume: sink 1's is the one the car's volume knob moves (knob.js)
+ *   connections():    its main connections [{ id, source, sink, state }]; ours keeps connState up to date
+ *   am(method, args): any other call of the command interface (the volume calls of knob.js / voltest.js)
  * One AudioManager call at a time, in order.
  */
 const fs = require('fs');
@@ -303,7 +305,7 @@ class Route {
     lists() {
         return this._queue(async () => {
             await this._init();
-            const out = { sources: [], sinks: [], connections: [], sourceClasses: [], sinkClasses: [], system: [], sinkSound: [], errors: [] };
+            const out = { sources: [], sinks: [], connections: [], sourceClasses: [], sinkClasses: [], system: [], sinkSound: [], sourceSound: [], errors: [] };
             const get = async (method, key, listKey, map, args) => {
                 try { out[key] = arrayIn(await this._call(method, args || {}, 3000), listKey).map(map); } catch (e) { out.errors.push(method + ': ' + String(e && e.message || e).slice(0, 40)); }
             };
@@ -317,6 +319,14 @@ class Route {
             await get('getListSinkClasses', 'sinkClasses', 'listSinkClasses', cls('sinkClassID'));
             await get('getListSystemProperties', 'system', 'listSystemProperties', (x) => x);
             await get('getListMainSinkSoundProperties', 'sinkSound', 'listSoundProperties', (x) => x, { sinkID: MAIN_SINK });
+            // the sound properties of what plays (ours and the music's source): is there a volume of their own?
+            const playing = out.connections.filter((c) => c.sink === SINK || c.sink === MAIN_SINK).map((c) => c.source);
+            for (const id of playing.filter((x, i) => playing.indexOf(x) === i).slice(0, 4)) {
+                try {
+                    const l = arrayIn(await this._call('getListMainSourceSoundProperties', { sourceID: id }, 3000), 'listSourceProperties');
+                    out.sourceSound.push({ id, props: l });
+                } catch (e) { out.errors.push('source sound ' + id + ': ' + String(e && e.message || e).slice(0, 30)); }
+            }
             return out;
         });
     }
@@ -330,15 +340,36 @@ class Route {
         });
     }
 
-    /** The AudioManager's main sources, [{ id, name }]; throws when the list is unavailable. */
+    /** The AudioManager's main sources, [{ id, name, cls: its class's id }]; throws when the list is unavailable. */
     sources() {
         return this._queue(async () => {
             await this._init();
             const r = await this._call('getListMainSources', {}, 3000);
-            return arrayIn(r, 'listMainSources').map((s) => ({ id: s.sourceID, name: String(s.name || '') }))
+            return arrayIn(r, 'listMainSources').map((s) => ({ id: s.sourceID, name: String(s.name || ''), cls: s.sourceClassID }))
                 .filter((s) => typeof s.id === 'number');
         });
     }
+
+    /** The AudioManager's main connections, [{ id, source, sink, state }]. Ours, while connected, sets connState (the
+     *  car suspends or removes it for a call or a prompt of its own); throws when the list is unavailable. */
+    connections() {
+        return this._queue(async () => {
+            await this._init();
+            const l = (await this._connections()).filter((x) => x && typeof x.sourceID === 'number')
+                .map((x) => ({ id: x.mainConnectionID, source: x.sourceID, sink: x.sinkID, state: stateName(x.connectionState) }));
+            const r = this.route;
+            if (r && this.state === 'connected' && this.connState) {
+                const c = l.find((x) => x.source === r.source && x.sink === r.sink);
+                this.connState = c ? c.state : 'no connection';
+            }
+            return l;
+        });
+    }
+
+    /** Another call of the command interface, in the queue: the reply. */
+    am(method, args) {
+        return this._queue(async () => { await this._init(); return this._call(method, args || {}, 3000); });
+    }
 }
 
-module.exports = { Route, EXCLUSIVE, MIX_DEFAULT, MIX_SOURCES, SINK, MAIN_SINK, deviceFor, mixCandidates, mixRoute, routeFor, sameRoute };
+module.exports = { Route, AM, EXCLUSIVE, MIX_DEFAULT, MIX_SOURCES, SINK, MAIN_SINK, deviceFor, mixCandidates, mixRoute, routeFor, sameRoute };

@@ -29,6 +29,8 @@ typedef struct {
     long taken, refused;          /* since the last status line: engine frames the device accepted, blocks it refused (-EAGAIN) */
     double stat_at;               /* when the next status line is due */
     int stat_state;               /* what the last status line said: 0 nothing yet, 1 playing, 2 nobody reads */
+    int rt, rt_errno;             /* real-time scheduling: 0 not asked yet, 1 on, -1 refused (why) */
+    double last, gap;             /* the last look at the queue while it played; the longest time between two (s) */
     int (*open)(void **, const char *, int, int);
     int (*params)(void *, int, int, unsigned, unsigned, int, unsigned);
     long (*write)(void *, const void *, unsigned long);   /* snd_pcm_sframes_t */

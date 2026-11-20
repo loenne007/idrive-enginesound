@@ -19,7 +19,10 @@ Restart=on-failure
 RestartSec=3
 TimeoutStopSec=5
 LimitCORE=1
-Nice=-5
+# the synth asks for real-time scheduling (round robin, priority 2) for itself: the car's overlay channels buffer only
+# 21 ms, and at normal priority a busy head unit makes it late (crackle). The service itself (node) stays normal.
+LimitRTPRIO=5
+Nice=-10
 
 [Install]
 WantedBy=multi-user.target

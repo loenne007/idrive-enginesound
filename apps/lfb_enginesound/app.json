@@ -2,7 +2,7 @@
   "id": "lfb_enginesound",
   "title": "Engine Sound",
   "description": "A synthesized engine sound (Inline 6, V8, V12, or bass for the car's own diesel) on the car's speakers, following the car's real rpm, gear and load; exclusive or over the music",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "vendor": "loenne007",
   "license": "MIT",
   "loggingId": "LFES",
@@ -12,7 +12,7 @@
   ],
   "autostart": true,
   "requires": {
-    "lfb-enginesound": "1.2.2"
+    "lfb-enginesound": "1.2.3"
   },
   "signals": {
     "de.bmw.infotainment.vehicle.CDS": {
@@ -40,6 +40,9 @@
         "getListMainSources",
         "getListMainSinks",
         "setVolume",
+        "getVolume",
+        "setConnectionVolumeStep",
+        "getListMainSourceSoundProperties",
         "getListSourceClasses",
         "getListSinkClasses",
         "getListSystemProperties",
@@ -186,6 +189,7 @@
       "default": "engine",
       "options": [
         ["engine", "Engine sound (as the car does it)"],
+        ["direct", "Music, without a pause (after the volume test)"],
         ["music", "Music (the engine pauses while you turn)"]
       ],
       "reset": 1

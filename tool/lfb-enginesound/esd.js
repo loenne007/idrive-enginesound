@@ -29,7 +29,7 @@ const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 
-const VERSION = '1.2.2';
+const VERSION = '1.2.3';
 const RUN_DIR = process.env.ES_RUN_DIR || '/run/lfb-enginesound';
 const SOCK = path.join(RUN_DIR, 'ctl.sock');
 const SYNTH_DIR = process.env.ES_SYNTH_DIR || __dirname;
@@ -62,14 +62,15 @@ const log = (m) => process.stderr.write(new Date().toISOString().slice(11, 19) +
 const state = { engine: null, device: null, tone: null, lastTone: null, alsa: null, sticky: {}, recent: [], starts: 0, lastStart: 0, child: null, retryT: null };
 const remember = (line) => { state.recent.push(line); if (state.recent.length > 30) state.recent.shift(); };
 /** What the playing synth says about its device, kept for STATUS (the last lines scroll away): the format and
- *  buffer it opened ({ dev, format }), its dropouts ("3 (0 underruns, 3 times the queue was empty)") and how far
- *  its queue went down ("1024 to 1536 of 1536 frames"). */
+ *  buffer it opened ({ dev, format }), its dropouts ("3 (0 underruns, 3 times the queue was empty), longest wait 30 ms"), how far
+ *  its queue went down ("1024 to 1536 of 1536 frames, longest wait 4 ms") and its scheduling ("realtime 2"). */
 function alsaSays(line) {
     let m = /^alsa: connected (\S+) \((.*)\)$/.exec(line);
-    if (m) { state.alsa = { dev: m[1], format: m[2], dropouts: null, queue: null }; return; }
+    if (m) { state.alsa = { dev: m[1], format: m[2], dropouts: null, queue: null, priority: null }; return; }
     if (!state.alsa) return;
     if ((m = /^alsa: dropouts (.*)$/.exec(line))) state.alsa.dropouts = m[1];
     else if ((m = /^alsa: queue (.*)$/.exec(line))) state.alsa.queue = m[1];
+    else if ((m = /^alsa: priority (.*)$/.exec(line))) state.alsa.priority = m[1];
 }
 
 function startSynth() {

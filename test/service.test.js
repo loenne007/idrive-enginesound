@@ -19,7 +19,7 @@ fs.writeFileSync(fake, '#!/usr/bin/env node\n' +
     // (a test tone: what the real synth says once the car reads the device)
     "if (process.argv[2] === '--tone') { console.error('alsa: connected ' + process.argv[3].slice(5) + ' (24000 Hz, mono)'); console.error('alsa: playing (the device takes the sound)'); setTimeout(() => process.exit(0), 200); }\n" +
     // (playing: what the real synth says about its device)
-    "else { const dev = process.argv[3].slice(5); console.error('alsa: connected ' + dev + ' (24000 Hz, mono, 1536 frames buffer, 1536 kept queued)'); console.error('alsa: dropouts 2 (0 underruns, 2 times the queue was empty)'); console.error('alsa: queue 512 to 1536 of 1536 frames'); }\n" +
+    "else { const dev = process.argv[3].slice(5); console.error('alsa: connected ' + dev + ' (24000 Hz, mono, 1536 frames buffer, 1536 kept queued)'); console.error('alsa: priority realtime 2'); console.error('alsa: dropouts 2 (0 underruns, 2 times the queue was empty), longest wait 30 ms'); console.error('alsa: queue 512 to 1536 of 1536 frames, longest wait 4 ms'); }\n" +
     "let b = ''; process.stdin.on('data', (d) => { b += d; let i; while ((i = b.indexOf('\\n')) >= 0) { const l = b.slice(0, i); b = b.slice(i + 1); log(l); if (l === 'Q') process.exit(0); } });\n");
 fs.chmodSync(fake, 0o755);
 // the shared-memory files of a G20 head unit (a few of them): p = playback endpoints, c = capture
@@ -72,7 +72,7 @@ async function until(what, fn) {
     assert.strictEqual(st.device, 'devB');
     // what the synth said about its device stays in the status
     assert.deepStrictEqual(st.alsa, { dev: 'devB', format: '24000 Hz, mono, 1536 frames buffer, 1536 kept queued',
-        dropouts: '2 (0 underruns, 2 times the queue was empty)', queue: '512 to 1536 of 1536 frames' });
+        dropouts: '2 (0 underruns, 2 times the queue was empty), longest wait 30 ms', queue: '512 to 1536 of 1536 frames, longest wait 4 ms', priority: 'realtime 2' });
     // the SmartX playback endpoints, from the files' names
     await until('the endpoint list arrives', () => d.shm && Array.isArray(d.shm.endpoints));
     assert.deepStrictEqual(d.shm.endpoints, ['CarLifeMedia_CF_48_STEREO', 'Media_Overlay_Converter_Source_CF_24_MONO', 'TencentOverlay_CF_24_MONO']);
