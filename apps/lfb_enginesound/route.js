@@ -23,6 +23,7 @@
  *   connect(route):   (mark available) + connect; a route that fails leaves nothing behind
  *   disconnect():     disconnect our connection (+ the 287 sweep and unavailable for the exclusive route)
  *   sources():        the AudioManager's main sources [{ id, name }] (getListMainSources), for the Audio page
+ *   sinks():          its main sinks with their volume: sink 1's is the one the car's volume knob moves (knob.js)
  * One AudioManager call at a time, in order.
  */
 const fs = require('fs');
@@ -128,7 +129,8 @@ const arrayIn = (r, key) => (r && Array.isArray(r[key]) ? r[key] : Array.isArray
 const listOf = (r) => (r && Array.isArray(r.listMainConnections) ? r.listMainConnections : arrayIn(r, 'listConnections'));
 const STATES = { 0: 'CS_UNKNOWN', 1: 'CS_CONNECTING', 2: 'CS_CONNECTED', 3: 'CS_DISCONNECTING', 4: 'CS_DISCONNECTED', 5: 'CS_SUSPENDED' };
 const stateName = (s) => STATES[s] || String(s);
-const CHECK_MS = 1500;        // the connection's state is looked at this long after a connect
+const FIRST_MS = 400;         // the connection's state is looked at this soon after a connect (the knob waits for CS_CONNECTED)
+const CHECK_MS = 1500;        // and, not connected by then, this long after it
 const MIX_SETTLE_MS = 6000;   // a mix connection not CS_CONNECTED by then is released (route failed)
 
 /* a main sink / source as the AudioManager lists it (am_SinkType_s: sinkID, name, availability, volume, muteState,
@@ -151,7 +153,7 @@ class Route {
         this.q = Promise.resolve();
         this.shape = false;
         this.gen = 0;                // bumped on every connect / disconnect (late checks of an old connect do nothing)
-        this.checkMs = CHECK_MS; this.settleMs = MIX_SETTLE_MS;
+        this.firstMs = FIRST_MS; this.checkMs = CHECK_MS; this.settleMs = MIX_SETTLE_MS;
     }
 
     _queue(fn) { const p = this.q.then(fn, fn); this.q = p.catch(() => {}); return p; }
@@ -240,7 +242,7 @@ class Route {
                 this.id = r.amError !== 'E_ALREADY_EXISTS' && r.mainConnectionID !== undefined && r.mainConnectionID !== null ? r.mainConnectionID : null;
                 if (route.kind === 'mix' && (r.amError !== 'E_ALREADY_EXISTS' || route.markAvailable)) this._note({ source: route.source, sink: route.sink, id: this.id, marked: !!route.markAvailable });
                 this.state = 'connected';
-                this._check(gen, this.checkMs);
+                this._check(gen, Math.min(this.firstMs, this.checkMs));
                 return true;
             } catch (e) {
                 this.error = String(e && e.message || e);
@@ -252,7 +254,7 @@ class Route {
         });
     }
 
-    /** After a connect: the connection's state as the AudioManager lists it. A mix route still not CS_CONNECTED after
+    /** After a connect: the connection's state as the AudioManager lists it (after firstMs, then checkMs). A mix route still not CS_CONNECTED after
      *  settleMs (6 s) failed: it is released (shown as failed), so no pending connection is left behind. */
     _check(gen, ms, since) {
         since = since || 0;
@@ -262,7 +264,9 @@ class Route {
             const c = (await this._connections()).find((x) => x && x.sourceID === route.source && x.sinkID === route.sink);
             this.connState = c ? stateName(c.connectionState) : 'no connection';
             this.log.info('audio: ' + label(route) + ' ' + ms + ' ms after connect: ' + this.connState);
-            if (route.kind !== 'mix' || this.connState === 'CS_CONNECTED') return;
+            if (this.connState === 'CS_CONNECTED') return;
+            if (ms < this.checkMs) return this._check(gen, this.checkMs, ms);
+            if (route.kind !== 'mix') return;
             if (ms < this.settleMs) return this._check(gen, this.settleMs, ms);
             this.error = 'stays ' + this.connState;
             this.log.warn('audio: mix route ' + label(route) + ' ' + this.error + ': released');

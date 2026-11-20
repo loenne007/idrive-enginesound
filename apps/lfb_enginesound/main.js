@@ -19,7 +19,8 @@ const { withAlpha } = require('./kit/canvas');
 const Car = require('./kit/car');
 const { Core, ORDER, SOUNDS, SOUND_SETTINGS } = require('./core');
 const { Daemon } = require('./daemon');
-const { Route, MIX_DEFAULT, SINK, mixCandidates, mixRoute, sameRoute } = require('./route');
+const { Route, MIX_DEFAULT, SINK, MAIN_SINK, mixCandidates, mixRoute, sameRoute } = require('./route');
+const { Knob, POLL_MS } = require('./knob');
 
 const W = 1600, H = 520;
 const TABS = ['Engine', 'Sound', 'Audio'];
@@ -40,6 +41,15 @@ function modeOf(v) {
 
 /** A value of the AudioManager for a report line (missing: "?"). */
 const show = (v) => (v === undefined || v === null ? '?' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+
+/** What this car's AudioManager interface lacks of what app.json asks for (the Store's build notes it in
+ * kit/missing-interfaces.json), as text; '' when nothing. */
+function amMissing() {
+    try {
+        const m = JSON.parse(fs.readFileSync(path.join(__dirname, 'kit', 'missing-interfaces.json'), 'utf8'));
+        return Object.keys(m).filter((k) => /org\.genivi\.am\./.test(k)).map((k) => k.replace(/^org\.genivi\.am\.\w+\./, '')).join('; ');
+    } catch (e) { return ''; }
+}
 
 /* The mix route chosen on the Audio page, kept in the app's data folder (no file: the default). */
 function mixStore(dataDir, log) {
@@ -82,22 +92,31 @@ async function background(bg) {
         },
     };
 
-    /* The car's volumes as the AudioManager lists them per sink (Audio page, read every second while it shows): is
-     * the volume knob's position among them? */
+    /* The volume knob over the music (knob.js): the car hands it to our source while the engine plays; the engine
+     * steps aside while it is turned, so it stays the music's. */
+    const knob = new Knob({ core, settings, log, dataDir: bg.dataDir,
+        link: () => (route.state !== 'connected' || !route.route || route.route.kind !== 'mix' ? 'off' : route.connState === 'CS_CONNECTED' ? 'connected' : 'linked') });
+
+    /* The car's volumes as the AudioManager lists them per sink: the main sink's is the one the volume knob moves.
+     * Read every second while the Audio page shows, and POLL_MS apart while the engine plays over the music. */
     const volumes = {
         sinks: null, error: null, busy: false,
         read() {
             if (volumes.busy) return;
             volumes.busy = true;
-            route.sinks().then((l) => { volumes.sinks = l; volumes.error = null; }, (e) => { volumes.error = String(e && e.message || e); })
+            route.sinks().then((l) => {
+                volumes.sinks = l; volumes.error = null;
+                const m = l.find((x) => x.id === MAIN_SINK);
+                if (m) knob.feed(m.volume);
+            }, (e) => { volumes.error = String(e && e.message || e); })
                 .then(() => { volumes.busy = false; });
         },
         text() {
             if (!volumes.sinks) return volumes.error ? 'Car volume: not readable' : 'Car volume: reading...';
-            const v = volumes.sinks.filter((x) => x.id === SINK || x.id === 1).map((x) => 'sink ' + x.id + ' = ' + show(x.volume) + (/^MS_MUTED$|^1$/.test(String(x.mute)) ? ' muted' : ''));
-            return 'Car volume: ' + (v.join(', ') || 'no sink listed');
+            return knob.text() || 'Car volume: no main sink listed';
         },
     };
+    setInterval(() => { if (knob.wanted()) volumes.read(); knob.tick(); }, POLL_MS);
 
     /* The audio report (Audio page > Diagnose): what the AudioManager lists, the SmartX files, the service's last
      * lines. Shown on the page, written to the log and to audio-report.txt in the app's data folder. */
@@ -118,6 +137,8 @@ async function background(bg) {
                 (st.log || []).slice(-10).forEach((x) => L.push('  ' + x));
                 L.push('ROUTE ' + route.state + (r ? ' ' + r.name + ' ' + r.source + '->' + r.sink : '') + (route.connState ? ' ' + route.connState : '') + (route.error ? ' ' + route.error : ''));
                 L.push('mix ' + (core.mixOn() ? 'on' : 'off') + ', mix route ' + core.activeRoute().name + ' ' + core.activeRoute().device);
+                knob.report().forEach((x) => L.push(x));
+                L.push('  AudioManager lacks: ' + (amMissing() || 'nothing asked for'));
                 if (l.errors && l.errors.length) l.errors.forEach((e) => L.push('AM error ' + e));
                 L.push('CONNECTIONS');
                 (l.connections || []).forEach((c) => L.push('  ' + c.id + ': ' + c.source + '->' + c.sink + ' ' + c.state));
@@ -155,7 +176,7 @@ async function background(bg) {
     settings.onChange((key) => core.onSetting(key));
     core.start();
     log.info('engine sound: background running');
-    return { core, car, daemon, route, audio, report, volumes };
+    return { core, car, daemon, route, audio, report, volumes, knob };
 }
 
 mgu.run({
@@ -338,7 +359,7 @@ mgu.run({
             cv.text(audio.loading ? 'AudioManager: reading the sources...' : audio.sources ? 'AudioManager: ' + audio.sources.length + ' sources' + (eps ? ', SmartX: ' + eps.length + ' endpoints' : '')
                 : 'AudioManager list unavailable' + (audio.error ? ': ' + audio.error : '') + ' - default used', 48, 442, 16, audio.sources || audio.loading ? t.dim : t.warn);
             if (!eps) cv.text('SmartX list unavailable: default device assumed', 48, 466, 16, t.warn);
-            cv.text(volumes.text().slice(0, 40), 48, 494, 16, t.dim);
+            cv.text(volumes.text().slice(0, 44), 48, 494, 16, t.dim);
             G.button(cv, t, 420, 468, 180, 36, diag ? 'Routes' : 'Diagnose', () => { diag = !diag; diagPage = 0; if (diag) report.make(); return redraw(); }, { key: 'diag' });
 
             if (diag) return drawReport(cv, t);

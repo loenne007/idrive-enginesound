@@ -13,6 +13,10 @@
  * synth is muted (it fades) and, after a few seconds, the audio route is released so the car's own source returns.
  * The route (route.js): exclusive (CarLifeMedia, the music pauses) or, with the setting mix ("Play over music"), the
  * mix route chosen on the Audio page (default OAPGenericOverlay), which plays over the music.
+ *
+ * Over the music the car hands its volume knob to our source (knob.js): hold(true) makes the engine step aside (muted,
+ * route released) while the knob is turned, so the knob stays the music's; setTrim(dB) makes up in the synth's gain
+ * for what the knob did to the engine's volume in the car.
  */
 /* lock: the "locked" rev ratio (engine rpm = car rpm x lock). The car's four-cylinder fires at engine order 2; the
  * ratio puts the preset's firing order on an even order of it: i6 3 x 4/3 = 4, V8 4 x 1.5 = 6, V10 5 x 1.6 = 8,
@@ -80,6 +84,7 @@ const SOUND_SETTINGS = [
 const ENGINE_RUNS = 400;      // rpm: below = engine off
 const TEST_MS = 11000;        // the test sound (10 s of beeps) owns the route this long
 const RELEASE_MS = 4000;      // muted this long: the audio route goes back to the car
+const HOLD_FADE_MS = 120;     // stepping aside for the volume knob: most of the synth's fade (100 ms time constant), then the route goes
 const SEND_MS = 10;           // P lines at 100 Hz, each with the rpm estimated for that moment (track.js)
 const RATE_LOG_MS = 600000;   // how often the car's rpm samples come: logged after a minute, then every 10 minutes
 const STALE_MS = 1500;        // no rpm for this long: no P lines (the synth fades)
@@ -100,6 +105,8 @@ class Core {
         this.out = { rpm: 0, load: 0, throttle: 0, gear: 0 };
         this.playing = false; this.reason = 'starting'; this.mutedAt = this.now(); this.routed = false; this.lastGear = undefined;
         this.testUntil = 0; this.testRoute = null; this.lastP = 0; this.playRoute = null;
+        this.held = false;        // stepped aside for the volume knob (knob.js)
+        this.trim = 1;            // the gain that makes up for the car's volume of our source (knob.js), linear
         this.timer = null;
     }
 
@@ -146,7 +153,10 @@ class Core {
     }
 
     /* ---------- when it plays ---------- */
-    why() {
+    why() { return this.baseWhy() || (this.held ? 'adjusting the music volume' : null); }
+
+    /** Why it would not play, the volume knob's hand-over aside (null: it plays, or has stepped aside for the knob). */
+    baseWhy() {
         const t = this.now();
         if (this.settings.get('enabled') === false) return 'off';
         if (!num(this.d.rpm) || t - this.d.rpmT > STALE_MS) return 'no engine data';
@@ -176,6 +186,26 @@ class Core {
     synthVolume() {
         const s = Number(this.settings.get('volume')), v = isFinite(s) && s > 0 ? clamp(s, 0, 100) : 50;
         return v <= 50 ? v / 50 * 0.9 : 0.9 + (v - 50) / 50 * 0.5;
+    }
+
+    /** The gain sent to the synth (V 0..2): the volume setting times the trim. */
+    outVolume() { return clamp(this.synthVolume() * this.trim, 0, 2); }
+
+    /** The trim in dB (knob.js): the synth's gain follows at once. */
+    setTrim(db) {
+        const g = Math.pow(10, (num(db) ? db : 0) / 20);
+        if (Math.abs(g - this.trim) < 0.005) return;
+        this.trim = g;
+        this.daemon.send('V ' + this.outVolume().toFixed(2));
+    }
+
+    /** Step aside for the volume knob (knob.js): muted, and the route released as soon as the fade is through, so the
+     * car gives the knob back to the music; hold(false): tick() plays again. */
+    hold(on) {
+        on = !!on;
+        if (on === this.held) return;
+        this.held = on;
+        this.log.info('sound: ' + (on ? 'steps aside for the volume knob' : 'back from the volume knob'));
     }
 
     /** The preset's title / subtitle / redline as shown: the sound engine's own names where it has them (Enhance). */
@@ -208,7 +238,7 @@ class Core {
         // (Enhance's presets are all turbo diesels)
         const turbo = soundEngineOf(this.soundEngine()).realRpm || PRESETS[p].turbo;
         this.daemon.send('T ' + (turbo && this.settings.get('turbo') !== false ? 1 : 0));
-        this.daemon.send('V ' + this.synthVolume().toFixed(2));
+        this.daemon.send('V ' + this.outVolume().toFixed(2));
         SOUND_SETTINGS.forEach((x) => this.daemon.send('X ' + x.name + ' ' + this.soundSetting(x.key).toFixed(2)));
     }
 
@@ -234,7 +264,7 @@ class Core {
             this._logRate(t);
         } else {
             if (this.playing) { this.playing = false; this.mutedAt = t; this.daemon.send('M 1'); }
-            if (this.routed && t - this.mutedAt > RELEASE_MS) this._route(false);
+            if (this.routed && t - this.mutedAt > (this.held ? HOLD_FADE_MS : RELEASE_MS)) this._route(false);
         }
     }
 

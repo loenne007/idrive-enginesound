@@ -2,7 +2,7 @@
   "id": "lfb_enginesound",
   "title": "Engine Sound",
   "description": "A synthesized engine sound (Inline 6, V8, V12, or bass for the car's own diesel) on the car's speakers, following the car's real rpm, gear and load; exclusive or over the music",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "vendor": "loenne007",
   "license": "MIT",
   "loggingId": "LFES",
@@ -38,7 +38,8 @@
         "disconnect",
         "getListMainConnections",
         "getListMainSources",
-        "getListMainSinks"
+        "getListMainSinks",
+        "setVolume"
       ]
     },
     "org.genivi.am.routinginterface.RoutingControlObserver": {
@@ -173,6 +174,16 @@
       "label": "Play over music (mix)",
       "type": "bool",
       "default": false
+    },
+    {
+      "key": "knob",
+      "label": "Volume knob over the music",
+      "type": "choice",
+      "default": "music",
+      "options": [
+        ["music", "Music (the engine pauses while you turn)"],
+        ["engine", "Engine sound"]
+      ]
     },
     {
       "key": "turbo",
