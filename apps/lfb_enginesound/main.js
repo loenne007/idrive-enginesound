@@ -19,9 +19,8 @@ const { withAlpha } = require('./kit/canvas');
 const Car = require('./kit/car');
 const { Core, ORDER, SOUNDS, SOUND_SETTINGS } = require('./core');
 const { Daemon } = require('./daemon');
-const { Route, AM, MIX_DEFAULT, SINK, MAIN_SINK, mixCandidates, mixRoute, sameRoute } = require('./route');
+const { Route, MIX_DEFAULT, SINK, MAIN_SINK, mixCandidates, mixRoute, sameRoute } = require('./route');
 const { Knob, POLL_MS } = require('./knob');
-const { VolTest, findDef, argsFor, defLines, FALLBACK } = require('./voltest');
 
 const W = 1600, H = 520;
 const TABS = ['Engine', 'Sound', 'Audio'];
@@ -86,11 +85,6 @@ function catalogLines(file) {
     return L;
 }
 
-/** The car's whole catalog entry of an interface (null: not readable). */
-function catalogOf(file, iface) {
-    try { return (JSON.parse(fs.readFileSync(file, 'utf8')).interfaces || {})[iface] || null; } catch (e) { return null; }
-}
-const ENT_CLASS = 1;          // the source class CP_ENTERTAINMENT (the music, the radio) in the car's AudioManager
 const LINKS_MS = 2000;        // how often the car's connections are read while the engine plays over the music
 const hhmmss = () => { const d = new Date(), z = (n) => (n < 10 ? '0' : '') + n; return z(d.getHours()) + ':' + z(d.getMinutes()) + ':' + z(d.getSeconds()); };
 
@@ -135,100 +129,41 @@ async function background(bg) {
         },
     };
 
-    /* The car's connections while the engine plays over the music: what plays beside us (the music's connection for
-     * knob.js "direct"; a call or a prompt, where the knob is not ours to touch) and what the car does with our own
-     * connection then. Every change is kept with its time for the report. */
+    /* The car's connections while the engine plays over the music: what plays beside us (the music, a call, a prompt)
+     * and what the car does with our own connection then. Every change is kept with its time for the report. */
     const links = {
-        list: null, at: 0, askedAt: 0, busy: false, cls: null, clsBusy: false, sig: null, events: [],
+        list: null, busy: false, sig: null, events: [],
         read() {
             if (links.busy) return;
             links.busy = true;
-            const asked = Date.now();
-            if (!links.cls && !links.clsBusy) {
-                links.clsBusy = true;
-                route.sources().then((l) => { links.cls = {}; l.forEach((x) => { links.cls[x.id] = x.cls; }); }, () => {}).then(() => { links.clsBusy = false; });
-            }
             route.connections().then((l) => {
-                links.list = l.filter((c) => c.sink === SINK || c.sink === MAIN_SINK); links.at = Date.now(); links.askedAt = asked;
+                links.list = l.filter((c) => c.sink === SINK || c.sink === MAIN_SINK);
                 const sig = links.list.map((c) => c.source + ' ' + c.state.replace(/^CS_/, '')).join(', ') || 'none';
                 if (sig !== links.sig) {
                     links.sig = sig;
                     links.events.push(hhmmss() + ' ' + sig); if (links.events.length > 10) links.events.shift();
                     log.info('links: ' + sig);
                 }
-                // (the knob waits for this list before it passes a turn on: on a fresh number)
-                if (knob.seenAt) volumes.read(true);
             }, (e) => { log.warn('links: ' + e); }).then(() => { links.busy = false; });
         },
-        ours(c) { const r = route.route; return !!r && c.source === r.source; },
-        /** The music's connection (an entertainment source on the speakers), or null. */
-        music() {
-            if (!links.list || !links.cls) return null;
-            return links.list.find((c) => !links.ours(c) && c.state === 'CS_CONNECTED' && links.cls[c.source] === ENT_CLASS) || null;
-        },
-        /** Only the music (or nothing) plays beside us, as of a list asked for after `since`: true / false; null: no such list yet (it is asked for). */
-        clear(since) {
-            if (!links.list || !links.cls || links.askedAt <= (since || 0)) { links.read(); return null; }
-            const others = links.list.filter((c) => !links.ours(c));
-            return links.list.some((c) => links.ours(c) && c.state === 'CS_CONNECTED')
-                && others.length <= 1 && others.every((c) => c.state === 'CS_CONNECTED' && links.cls[c.source] === ENT_CLASS);
-        },
     };
 
-    /* The volume calls of the car's AudioManager (voltest.js, knob.js "direct"): what the car's definitions say about
-     * their arguments, and the last volume test's result (volume-test.json). */
-    const def = (() => {
-        let own = null;
-        try { own = signals.loadConfig ? signals.loadConfig(AM) : null; } catch (e) { own = null; }
-        const cat = catalogOf(CATALOG, AM), o = {};
-        Object.keys(FALLBACK).concat(['volumeStep', 'setVolumeInPercent']).forEach((m) => {
-            o[m] = findDef(own && (own.methods || own), m) || findDef(cat && (cat.methods || cat), m);
-        });
-        return o;
-    })();
-    const testFile = path.join(bg.dataDir || '.', 'volume-test.json');
-    let saved = null;
-    try { saved = JSON.parse(fs.readFileSync(testFile, 'utf8')); } catch (e) { saved = null; }
-    const okAm = (r) => !!r && (r.amError === 'E_OK' || r.amError === 0);
-    const amCall = (method, ctx) => {
-        const a = argsFor(voltest.names[method], ctx);
-        return a.args ? route.am(method, a.args).then(okAm) : Promise.reject(new Error('argument ' + a.unknown));
-    };
-
-    /* The volume knob over the music (knob.js): the car hands it to our source while the engine plays. "direct": the
-     * app puts our source's volume back and passes the knob's steps on to the music. */
+    /* The volume knob over the music (knob.js): the car hands it to our source while the engine plays. */
     const linkOf = () => (route.state !== 'connected' || !route.route || route.route.kind !== 'mix' ? 'off' : route.connState === 'CS_CONNECTED' ? 'connected' : 'linked');
-    const knob = new Knob({ core, settings, log, link: linkOf,
-        direct: {
-            ready: () => (voltest.result && voltest.result.ok ? voltest.result.pin : null),
-            // (the number is read right behind it: was it taken?)
-            set: (v) => { const p = amCall('setVolume', { sink: MAIN_SINK, value: v }); volumes.read(true); return p; },
-            step: (d) => { const m = links.music(); return m ? amCall('setConnectionVolumeStep', { sink: MAIN_SINK, conn: m.id, source: m.source, value: d }) : null; },
-            clear: (since) => links.clear(since),
-        } });
-    const voltest = new VolTest({ core, knob, log, link: linkOf, sink: MAIN_SINK, defs: def, saved,
-        am: (m, a) => route.am(m, a), music: () => links.music(), clear: () => links.clear(0) === true,
-        done: (res) => {
-            try { fs.writeFileSync(testFile, JSON.stringify(res)); } catch (e) { log.warn('volume test: ' + e); }
-            knob.resetDirect();
-            if (res.ok && settings.get('knob') !== 'direct') settings.set('knob', 'direct');
-            report.make();
-        } });
+    const knob = new Knob({ core, settings, log, link: linkOf });
     setInterval(() => { if (knob.wanted()) links.read(); }, LINKS_MS);
 
     /* The car's volumes as the AudioManager lists them per sink: the main sink's is the one the volume knob moves.
      * Read every second while the Audio page shows, and POLL_MS apart while the engine plays over the music. */
     const volumes = {
         sinks: null, error: null, busy: false,
-        read(force) {
-            if (volumes.busy && !force) return;
+        read() {
+            if (volumes.busy) return;
             volumes.busy = true;
-            const asked = Date.now();
             route.sinks().then((l) => {
                 volumes.sinks = l; volumes.error = null;
                 const m = l.find((x) => x.id === MAIN_SINK);
-                // (looked at at once: a step of the knob made between this number and the answer to it would be lost)
-                if (m) { knob.feed(m.volume, asked); if (knob.wanted()) knob.tick(); }
+                if (m) knob.feed(m.volume);
             }, (e) => { volumes.error = String(e && e.message || e); })
                 .then(() => { volumes.busy = false; });
         },
@@ -240,7 +175,7 @@ async function background(bg) {
     // (every POLL_MS only where a turn of the knob is acted on; as the car does it, a third as often is enough for the
     // speaker cap and the report, and leaves the head unit more time for the sound itself)
     let polls = 0;
-    setInterval(() => { if (knob.wanted() && (knob.fast() || ++polls % 3 === 0)) volumes.read(); knob.tick(); }, POLL_MS);
+    setInterval(() => { if (knob.wanted() && (knob.musicMode() || ++polls % 3 === 0)) volumes.read(); knob.tick(); }, POLL_MS);
 
     /* The audio report (Audio page > Diagnose): what the AudioManager lists, the SmartX files, the service's last
      * lines. Shown on the page, written to the log and to audio-report.txt in the app's data folder. */
@@ -262,12 +197,9 @@ async function background(bg) {
                     if (st.alsa.queue) L.push('  queue ' + st.alsa.queue);
                 }
                 knob.report().slice(0, 1).concat(knob.report().slice(1).slice(-8)).forEach((x) => L.push(x));
-                voltest.lines().forEach((x) => L.push(x));
                 // what played beside us and what the car did with our connection (a call, a prompt), newest last
                 L.push('LINKS (source state, at every change)');
                 links.events.forEach((x) => L.push('  ' + x));
-                L.push('VOLUME CALLS (the car\'s definitions)');
-                defLines(def, 64).forEach((x) => L.push(x));
                 L.push('SOURCE SOUND');
                 (l.sourceSound || []).forEach((x) => L.push(('  ' + x.id + ' ' + JSON.stringify(x.props).replace(/"/g, '')).slice(0, 68)));
                 L.push('out ' + (st.device || '-') + (st.tone ? ' tone ' + st.tone : ''));
@@ -319,17 +251,17 @@ async function background(bg) {
     car.setRedline(4800);
     car.onSample((d) => core.feed({ rpm: d.rpm, speed: d.speed, gear: d.gear, demo: d.demo,
         torque: d.demo && typeof d.torque === 'number' ? d.torque : undefined }));
-    settings.onChange((key) => { if (key === 'knob') knob.resetDirect(); core.onSetting(key); });
+    settings.onChange((key) => core.onSetting(key));
     core.start();
     log.info('engine sound: background running');
-    return { core, car, daemon, route, audio, report, volumes, knob, voltest };
+    return { core, car, daemon, route, audio, report, volumes, knob };
 }
 
 mgu.run({
     background,
     async start(ctx) {
         const { ui, settings, log } = ctx;
-        const { core, daemon, route, audio, report, volumes, voltest } = ctx.background || await background(ctx);
+        const { core, daemon, route, audio, report, volumes } = ctx.background || await background(ctx);
         let diag = false, diagPage = 0, mixPage = 0;
         let dirty = true, page = 0;
         const redraw = () => { dirty = true; return render(); };
@@ -575,8 +507,6 @@ mgu.run({
             if (!L) { cv.text(report.loading ? 'Reading...' : 'No report', 664, 110, 18, t.dim); return; }
             const pages = Math.max(1, Math.ceil(L.length / per));
             diagPage = Math.min(diagPage, pages - 1);
-            // the volume test (voltest.js): about 15 s with the engine over the music; the report follows by itself
-            G.button(cv, t, 1090, 58, 198, 40, voltest.running ? 'Testing...' : 'Volume test', voltest.running ? null : () => { voltest.run(); return redraw(); }, { key: 'vol-test', busy: voltest.running });
             G.button(cv, t, 1300, 58, 120, 40, 'Again', () => { report.make(); return redraw(); }, { key: 'diag-again', busy: report.loading });
             G.button(cv, t, 1432, 58, 128, 40, (diagPage + 1) + ' / ' + pages, () => { diagPage = (diagPage + 1) % pages; return redraw(); }, { key: 'diag-page' });
             L.slice(diagPage * per, diagPage * per + per).forEach((x, i) => {

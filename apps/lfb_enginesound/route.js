@@ -25,7 +25,6 @@
  *   sources():        the AudioManager's main sources [{ id, name }] (getListMainSources), for the Audio page
  *   sinks():          its main sinks with their volume: sink 1's is the one the car's volume knob moves (knob.js)
  *   connections():    its main connections [{ id, source, sink, state }]; ours keeps connState up to date
- *   am(method, args): any other call of the command interface (the volume calls of knob.js / voltest.js)
  * One AudioManager call at a time, in order.
  */
 const fs = require('fs');
@@ -365,11 +364,6 @@ class Route {
             return l;
         });
     }
-
-    /** Another call of the command interface, in the queue: the reply. */
-    am(method, args) {
-        return this._queue(async () => { await this._init(); return this._call(method, args || {}, 3000); });
-    }
 }
 
-module.exports = { Route, AM, EXCLUSIVE, MIX_DEFAULT, MIX_SOURCES, SINK, MAIN_SINK, deviceFor, mixCandidates, mixRoute, routeFor, sameRoute };
+module.exports = { Route, EXCLUSIVE, MIX_DEFAULT, MIX_SOURCES, SINK, MAIN_SINK, deviceFor, mixCandidates, mixRoute, routeFor, sameRoute };

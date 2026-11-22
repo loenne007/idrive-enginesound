@@ -3,8 +3,7 @@
 // fake car: its main volume is the music's while only the music plays and our source's while the engine is connected.
 const assert = require('assert');
 const { Core } = require('../apps/lfb_enginesound/core');
-const { Knob, POLL_MS, QUIET_MS, PAUSE_MS, CAP, UP_MAX } = require('../apps/lfb_enginesound/knob');
-const { VolTest, findDef, inputNames, argsFor, defLines } = require('../apps/lfb_enginesound/voltest');
+const { Knob, POLL_MS, QUIET_MS, PAUSE_MS, CAP } = require('../apps/lfb_enginesound/knob');
 
 function make(over) {
     const vals = Object.assign({ enabled: true, engine: 'v8', soundEngine: 'simulate', volume: 50, mix: true, knob: 'engine', rpmMap: 'locked', maxTorque: 400, turbo: true }, over || {});
@@ -13,22 +12,8 @@ function make(over) {
     const now = () => t;
     // the car: two volumes, the knob moves the one of what plays on top; a connect is CS_CONNECTED 300 ms later
     const car = { music: 30, overlay: 40, conn: false, connAt: 0, readable: true,
-        number() { return car.call !== null ? car.call : car.conn ? car.overlay : car.music; },
-        turn(steps) { if (car.call !== null) car.call += steps; else if (car.conn) car.overlay += steps; else car.music += steps; },
-        // its AudioManager's volume calls: setVolume is the volume of what is on top, setConnectionVolumeStep one
-        // connection's (7: the music's); `deaf`: calls that answer E_OK and do nothing; a phone call (its volume on top)
-        call: null, hasMusic: true, deaf: {}, stepsOwn: false, floor: false, setsMusic: false, calls: [],
-        am(method, a) {
-            car.calls.push(method + ' ' + JSON.stringify(a));
-            if (car.fail && car.fail[method]) return Promise.reject(new Error('E_NOT_POSSIBLE'));
-            if (!car.deaf[method]) {
-                if (method === 'setVolume') {
-                    if (car.setsMusic) car.music = a.volume; else if (car.call !== null) car.call = a.volume; else if (car.conn) { if (!(car.floor && a.volume < car.music)) car.overlay = a.volume; } else car.music = a.volume;
-                }
-                if (method === 'setConnectionVolumeStep') { if (car.stepsOwn) car.overlay += a.volumeStep; else if (a.mainConnectionID === 7) car.music += a.volumeStep; }
-            }
-            return Promise.resolve(method === 'getVolume' ? { volume: car.number(), amError: 'E_OK' } : { amError: 'E_OK' });
-        } };
+        number() { return car.conn ? car.overlay : car.music; },
+        turn(steps) { if (car.conn) car.overlay += steps; else car.music += steps; } };
     const route = { state: 'off', connState: null, route: null,
         connect(r) { route.route = r; route.state = 'connected'; route.connState = null; car.connAt = t; car.conn = true; return Promise.resolve(true); },
         disconnect() { route.route = null; route.state = 'off'; route.connState = null; car.conn = false; return Promise.resolve(); } };
@@ -36,20 +21,8 @@ function make(over) {
     const settings = { get: (k) => vals[k], set: (k, v) => { vals[k] = v; core.onSetting(k); } };
     const core = new Core({ settings, log, daemon: { send: (l) => sent.push(l), shm: null }, route, now });
     core._applySettings();       // (what core.start() sends first, without its timer)
-    const link = () => (route.state !== 'connected' || !route.route || route.route.kind !== 'mix' ? 'off' : route.connState === 'CS_CONNECTED' ? 'connected' : 'linked');
-    const ok = (r) => r.amError === 'E_OK';
-    const music = () => (car.hasMusic ? { id: 7, source: 266 } : null);
-    // (the list of connections: one reading late, as in the car)
-    let asked = 0;
-    const clear = (since) => { if (asked <= since) { asked = t; return null; } return car.call === null; };
-    let voltest = null;
-    const knob = new Knob({ core, settings, log, now, link,
-        direct: {
-            ready: () => (voltest && voltest.result && voltest.result.ok ? voltest.result.pin : null),
-            set: (v) => car.am('setVolume', { sinkID: 1, volume: v }).then(ok),
-            step: (d) => (music() ? car.am('setConnectionVolumeStep', { mainConnectionID: 7, volumeStep: d }).then(ok) : null),
-            clear,
-        } });
+    const knob = new Knob({ core, settings, log, now,
+        link: () => (route.state !== 'connected' || !route.route || route.route.kind !== 'mix' ? 'off' : route.connState === 'CS_CONNECTED' ? 'connected' : 'linked') });
     /** ms of the app running: core.tick every 10 ms, the number read and knob.tick every POLL_MS; each(t) before every step. */
     const run = (ms, each) => {
         for (const end = t + ms; t < end;) {
@@ -58,13 +31,10 @@ function make(over) {
             if (route.state === 'connected' && !route.connState && t - car.connAt >= 300) route.connState = 'CS_CONNECTED';
             core.feed({ rpm: 1500, speed: 50, gear: 3, torque: 100 });
             core.tick();
-            if (t % POLL_MS === 0) { if (knob.wanted() && car.readable) knob.feed(car.number(), t - 20); knob.tick(); }
+            if (t % POLL_MS === 0) { if (knob.wanted() && car.readable) knob.feed(car.number()); knob.tick(); }
         }
     };
-    voltest = new VolTest({ core, knob, log, link, sink: 1, now, defs: (over || {}).defs || {}, saved: (over || {}).saved || null,
-        am: car.am, music, clear: () => car.call === null, done: (res) => { if (res.ok) vals.knob = 'direct'; knob.resetDirect(); },
-        sleep: (ms) => { run(ms); return Promise.resolve(); } });
-    return { core, knob, car, route, sent, vals, settings, run, now, voltest };
+    return { core, knob, car, route, sent, vals, settings, run, now };
 }
 const last = (sent, re) => sent.filter((l) => re.test(l)).pop();
 
@@ -221,200 +191,4 @@ const last = (sent, re) => sent.filter((l) => re.test(l)).pop();
     assert.strictEqual(knob.mode, 'off');
     core.endTest();
 }
-
-/* ---------- the volume test and "direct": the knob stays the music's without a pause ---------- */
-
-// a method's arguments from the car's definition, whatever its shape
-{
-    const cat = { methods: { setVolume: { id: 9, inputs: [{ name: 'sinkID', type: 'u16' }, { name: 'volume', type: 'i16' }], outputs: [{ name: 'amError' }] } },
-        list: [{ name: 'setConnectionVolumeStep', in: { connectionID: 'u16', volStep: 'i16' } }] };
-    assert.deepStrictEqual(inputNames(findDef(cat, 'setVolume')), ['sinkID', 'volume']);
-    assert.deepStrictEqual(inputNames(findDef(cat, 'setConnectionVolumeStep')), ['connectionID', 'volStep']);
-    assert.strictEqual(inputNames(findDef(cat, 'getVolume')), null);
-    assert.strictEqual(inputNames({ id: 4 }), null);
-    assert.deepStrictEqual(argsFor(['connectionID', 'volStep'], { conn: 7, value: -2, sink: 1 }), { args: { connectionID: 7, volStep: -2 } });
-    assert.deepStrictEqual(argsFor(['sinkID', 'volume'], { sink: 1, value: 30 }), { args: { sinkID: 1, volume: 30 } });
-    assert.deepStrictEqual(argsFor(['sinkID', 'ramp'], { sink: 1, value: 30 }), { unknown: 'ramp' });
-    assert(defLines({ setVolume: cat.methods.setVolume, getVolume: null }, 64).some((l) => /getVolume no definition found/.test(l)));
-}
-
-(async () => {
-    // the test passes in a car whose calls do what their names say: only down and back, and then direct is on
-    {
-        const { core, knob, car, vals, run, voltest } = make();
-        run(3000);
-        const res = await voltest.run();
-        assert.strictEqual(res.ok, true, res.lines.join('\n'));
-        assert.strictEqual(res.pin, 40);
-        assert.strictEqual(car.music, 30, 'the music is where it was');
-        assert.strictEqual(car.overlay, 40, 'the engine too');
-        assert(car.calls.every((c) => !/"volume":(4[1-9]|[5-9]\d)/.test(c) && !/"volumeStep":[1-9]/.test(c)), 'nothing was ever turned up: ' + car.calls.join(' | '));
-        assert(/passed/.test(res.lines[0]) && res.lines.some((l) => /music 30, engine 40/.test(l)) && res.lines.some((l) => /music after: 28, put back: 30 ok/.test(l)), res.lines.join('\n'));
-        assert.strictEqual(vals.knob, 'direct');
-        assert.strictEqual(core.held, false);
-        assert.strictEqual(knob.testing, false);
-        run(3000);
-        assert.strictEqual(knob.mode, 'watching');
-        // a turn of the knob: every step reaches the music, the engine is back where it was, no pause
-        car.calls.length = 0;
-        let muted = false;
-        run(1000, (t) => { if (t % 100 === 0) car.turn(1); if (core.held) muted = true; });
-        run(1500);
-        assert.strictEqual(car.overlay, 40, 'the engine stays');
-        assert.strictEqual(car.music, 40, 'all ten steps are the music\'s');
-        assert.strictEqual(muted, false, 'and nothing stepped aside');
-        assert.strictEqual(knob.trim, 0);
-        assert(knob.report().some((l) => /music \+10, engine stays 40/.test(l)), knob.report().join('\n'));
-        assert(knob.report()[0].indexOf('KNOB direct, watching, vol 40, 0.0 dB, pin 40, music +10') === 0, knob.report()[0]);
-        assert.strictEqual(knob.text(), 'Car volume 40, knob: music, direct');
-        run(1000, (t) => { if (t % 100 === 0) car.turn(-1); });
-        run(1500);
-        assert.strictEqual(car.overlay, 40);
-        assert.strictEqual(car.music, 30);
-        // while the number is over the pin, the synth turns the engine down
-        car.turn(3);
-        let low = 0;
-        run(POLL_MS * 2, () => { low = Math.min(low, knob.trim); });
-        assert.strictEqual(low, -3);
-        run(1000);
-        assert.strictEqual(knob.trim, 0);
-        // the car connects our source at the music's volume when that is higher: put back, and that is no turn
-        car.music = 46;
-        vals.enabled = false; run(1500); vals.enabled = true;
-        car.overlay = 46;
-        run(4000);
-        assert.strictEqual(knob.mode, 'watching');
-        assert.strictEqual(car.overlay, 40, 'back at the pin');
-        assert.strictEqual(car.music, 46, 'nothing passed on to the music');
-        // a phone call takes the top: its volume is not ours to touch, and nothing reaches the music
-        car.calls.length = 0;
-        car.call = 25;
-        run(600);
-        car.turn(4);
-        run(2000);
-        assert.strictEqual(car.call, 29, 'the call\'s volume is left alone');
-        assert.strictEqual(car.music, 46);
-        assert.strictEqual(car.calls.length, 0, car.calls.join(' | '));
-        car.call = null;
-        run(2000);
-        assert.strictEqual(car.overlay, 40);
-        assert.strictEqual(car.music, 46, 'the return from the call is no turn either');
-        car.turn(2);
-        run(1500);
-        assert.strictEqual(car.music, 48);
-        // a spinning number: no more than UP_MAX steps up within two seconds
-        car.music = 20;
-        run(1900, (t) => { if (t % 50 === 0) car.turn(2); });
-        assert(car.music - 20 <= UP_MAX + 10, 'limited: ' + (car.music - 20));
-    }
-    // without music the knob has nothing to move: the engine still stays
-    {
-        const { knob, car, run, voltest } = make();
-        run(3000);
-        await voltest.run();
-        run(3000);
-        car.hasMusic = false;
-        car.turn(5);
-        run(1500);
-        assert.strictEqual(car.overlay, 40);
-        assert.strictEqual(car.music, 30);
-        assert.strictEqual(knob.directOff, null);
-    }
-    // the car keeps our source at least at the music's volume: taken as it is, the synth makes up for it
-    {
-        const { knob, car, vals, run, voltest } = make();
-        run(3000);
-        await voltest.run();
-        car.floor = true; car.music = 44;
-        vals.enabled = false; run(1500); vals.enabled = true;
-        car.overlay = 44;
-        run(4000);
-        assert.strictEqual(car.overlay, 44);
-        assert.strictEqual(knob.pin, 44);
-        assert.strictEqual(knob.trim, -4, 'the engine is as loud as at 40');
-        assert.strictEqual(knob.directOff, null);
-        assert(knob.report().some((l) => /the car keeps the engine at 44 \(asked 40\)/.test(l)));
-    }
-    // cars where the calls do not do it: the test says which, direct stays off, nothing is left changed
-    {
-        const { knob, car, vals, run, voltest } = make();
-        car.deaf.setConnectionVolumeStep = true;
-        run(3000);
-        const res = await voltest.run();
-        assert.strictEqual(res.ok, false);
-        assert(res.lines.some((l) => /the steps did not reach it/.test(l)), res.lines.join('\n'));
-        assert.strictEqual(vals.knob, 'engine');
-        assert.strictEqual(car.music, 30); assert.strictEqual(car.overlay, 40);
-        run(3000);
-        car.turn(3); run(1000);
-        assert.strictEqual(car.overlay, 43, 'the knob is the engine\'s as before');
-        assert.strictEqual(knob.text(), 'Car volume 43, knob: engine');
-    }
-    {
-        const { car, run, voltest } = make();
-        car.stepsOwn = true;
-        run(3000);
-        const res = await voltest.run();
-        assert.strictEqual(res.ok, false);
-        assert(res.lines.some((l) => /it moved the engine, not the music/.test(l)), res.lines.join('\n'));
-        assert.strictEqual(car.music, 30, res.lines.join('\n') + car.calls.join(' | ')); assert.strictEqual(car.overlay, 40);
-    }
-    {
-        const { car, run, voltest } = make();
-        car.fail = { setVolume: true };
-        run(3000);
-        const res = await voltest.run();
-        assert.strictEqual(res.ok, false);
-        assert(res.lines.some((l) => /setVolume .*E_NOT_POSSIBLE/.test(l)), res.lines.join('\n'));
-        assert.strictEqual(car.music, 30); assert.strictEqual(car.overlay, 40);
-    }
-    // a car whose setVolume is always the music's: found out, the music put back, and no call ever asks for more
-    // than there was
-    {
-        const { car, vals, run, voltest } = make();
-        car.setsMusic = true;
-        run(3000);
-        const res = await voltest.run();
-        assert.strictEqual(res.ok, false);
-        assert(res.lines.some((l) => /it set the music instead: 30 -> 38, put back: 30/.test(l)), res.lines.join('\n'));
-        assert.strictEqual(car.music, 30); assert.strictEqual(car.overlay, 40);
-        assert.deepStrictEqual(car.calls, ['setVolume {"sinkID":1,"volume":38}', 'setVolume {"sinkID":1,"volume":30}']);
-        assert.strictEqual(vals.knob, 'engine');
-    }
-    // not while nothing plays over the music, and not during a call
-    {
-        const { car, run, voltest } = make({ mix: false });
-        run(3000);
-        assert(/must play over the music/.test((await voltest.run()).lines[1]));
-        const b = make();
-        b.run(3000);
-        b.car.call = 20;
-        assert(/something else plays/.test((await b.voltest.run()).lines[1]));
-        assert.strictEqual(car.calls.length + b.car.calls.length, 0);
-    }
-    // direct chosen without a passed test: as "engine", and the page says why
-    {
-        const { knob, car, run } = make({ knob: 'direct' });
-        run(3000);
-        car.turn(3); run(1000);
-        assert.strictEqual(car.overlay, 43);
-        assert.strictEqual(knob.text(), 'Car volume 43, knob: engine (volume test first)');
-    }
-    // the car stops taking the volume back: direct goes off, the music does not run away
-    {
-        const { knob, car, run, voltest } = make();
-        run(3000);
-        await voltest.run();
-        run(3000);
-        car.deaf.setVolume = true;
-        car.turn(2);
-        run(3000);
-        assert(knob.directOff, 'off');
-        assert.strictEqual(car.music, 32, 'the two steps went to the music once');
-        car.turn(5);
-        run(2000);
-        assert.strictEqual(car.music, 32);
-        assert(/direct failed/.test(knob.text()), knob.text());
-    }
-    console.log('knob tests ok');
-})().catch((e) => { console.error(e); process.exit(1); });
+console.log('knob tests ok');

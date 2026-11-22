@@ -2,7 +2,7 @@
   "id": "lfb_enginesound",
   "title": "Engine Sound",
   "description": "A synthesized engine sound (Inline 6, V8, V12, or bass for the car's own diesel) on the car's speakers, following the car's real rpm, gear and load; exclusive or over the music",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "vendor": "loenne007",
   "license": "MIT",
   "loggingId": "LFES",
@@ -39,9 +39,6 @@
         "getListMainConnections",
         "getListMainSources",
         "getListMainSinks",
-        "setVolume",
-        "getVolume",
-        "setConnectionVolumeStep",
         "getListMainSourceSoundProperties",
         "getListSourceClasses",
         "getListSinkClasses",
@@ -189,7 +186,6 @@
       "default": "engine",
       "options": [
         ["engine", "Engine sound (as the car does it)"],
-        ["direct", "Music, without a pause (after the volume test)"],
         ["music", "Music (the engine pauses while you turn)"]
       ],
       "reset": 1

@@ -110,26 +110,20 @@ sees it (`knob.js`). The setting *Volume knob over the music*:
 
 - **Engine sound** (the default): as the car does it. The knob moves the engine while it plays; for the music's
   volume, switch the engine sound off for a moment.
-- **Music, without a pause** (`direct`, set by a passed volume test): the car's AudioManager takes volumes from the
-  app. A turn of the knob moves our source's volume; the app puts it back at once (`setVolume` on the main sink) and
-  gives the steps to the music's connection (`setConnectionVolumeStep`, BMW's own call). So the engine stays as loud
-  as it was and the knob stays the music's. Nothing is passed on while anything but the music plays beside the engine
-  (a phone call, a prompt of the car), and the knob is the engine's again if a call fails twice.
 - **Music** (with a pause): the engine steps aside as soon as the knob turns (muted, its route released), the car
   gives the knob back to the music, and the engine returns 1.5 s after the knob rests. The price: the engine pauses
   and the music jumps to its own volume and back at every turn.
 
-**The volume test** (Audio > Diagnose > Volume test, with the engine playing over music, about 15 s) finds out whether
-those two calls do in this car what their names say (`voltest.js`): it reads the music's and the engine's volume, sets
-the engine's 2 steps down and back, steps the music's connection 2 down, and looks whether the music followed; the
-music is put back to what it was. It only ever turns down, and stops where a call does not do what is expected.
-Passed, the setting switches to *Music, without a pause*. Its lines stay in the report.
+The car's AudioManager also has calls that set volumes (`setVolume`, BMW's own `setConnectionVolumeStep`). 1.2.5
+tried them (a volume test, and a knob mode that put the engine's volume back and passed the steps on to the music);
+in the car the music could not be turned up any more afterwards, so 1.2.6 took both out again: the app sets no volume
+in the car.
 
 For the speakers, in all: the source's volume in the car counts for no more than 48 (the car's top is 55); turned
 higher, the synth turns down what is over (1 dB a step, an estimate). The Audio page's last line shows the car
-volume, the knob's mode and that gain. **Diagnose** lists, first, the knob's last events, the volume test, every
-change of what played beside the engine (*LINKS*: a phone call, a prompt, and what the car did with our connection
-then) and the car's definitions of the volume calls; then the AudioManager's source and sink
+volume, the knob's mode and that gain. **Diagnose** lists, first, the knob's last events and every change of what
+played beside the engine (*LINKS*: a phone call, a prompt, and what the car did with our connection then); then the
+AudioManager's source and sink
 classes and properties, every source with its class, and what the car's SOME/IP catalog offers on the AudioManager's
 interfaces.
 
